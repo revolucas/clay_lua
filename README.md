@@ -31,7 +31,5 @@ Includes demo pages (corner radius, long lists, text alignment, floating invento
 (*These run `luajit main.lua` from the repo root.*)
 
 #### Linux example
-```bash
-gcc -O2 -fPIC -shared -I./clay -I/path/to/luajit/src \
-  clay_lua_bindings.c -L/path/to/luajit/src -lluajit -o clay.so
+Run `make`
 
