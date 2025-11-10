@@ -9,6 +9,8 @@ Includes demo pages (corner radius, long lists, text alignment, floating invento
 - BGFX rendering path (rectangle, rounded corners, borders, text, images)
 - Demo pages: Home, Corner Radius, Long List, Text Alignment, Floating Inventory, UI Controls
 
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/1f31e1ad-6288-4f06-9d14-a02c7765e85a" />
+
 ## Project Layout (selected)
 - `main.lua` — entry point; sets up window, bgfx, Clay, loads shaders, and runs the main loop.
 - `window.lua` — GLFW window creation + callback plumbing exposed to Lua.  
