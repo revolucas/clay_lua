@@ -3,6 +3,7 @@
 A LuaJIT renderer + UI demo for [Clay], running on BGFX and GLFW via FFI.  
 Includes demo pages (corner radius, long lists, text alignment, floating inventory, UI controls, etc.).
 
+A demonstration of [clay_lua_bindings](https://github.com/revolucas/clay_lua_bindings)
 ## Features
 - Clay UI elements and scrolling with pointer integration
 - Text measurement and Rich Text parsing via `font_manager` and stb truetype
