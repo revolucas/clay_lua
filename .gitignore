@@ -1,1 +1,17 @@
-/bin/*\n!/bin/.gitkeep
+# Ignore everything under bin/
+bin/**
+
+# But keep the top-level placeholder
+!bin/.gitkeep
+
+# Keep the two subdirectories themselves…
+!bin/linux64/
+!bin/x64/
+
+# …and ignore their contents except their placeholders
+bin/linux64/**
+!bin/linux64/.gitkeep
+
+bin/x64/**
+!bin/x64/.gitkeep
+
