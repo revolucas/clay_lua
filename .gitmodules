@@ -1,0 +1,4 @@
+[submodule "clay_lua_bindings"]
+	path = src/clay_lua_bindings
+	url = https://github.com/revolucas/clay_lua_bindings.git
+	branch = main

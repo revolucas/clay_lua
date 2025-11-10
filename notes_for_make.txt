@@ -1,0 +1,69 @@
+## Building BGFX
+1.
+    ```git clone https://github.com/bkaradzic/bx.git
+    git clone https://github.com/bkaradzic/bimg.git
+    git clone https://github.com/bkaradzic/bgfx.git```
+
+### Linux
+2. ```sudo apt-get install libgl1-mesa-dev x11proto-core-dev libx11-dev```
+
+3.
+```
+# Use the prebuilt genie in bx
+GENIE=../bx/tools/bin/linux/genie
+
+# Generate gmake projects (no examples flags, so examples are NOT generated)
+$GENIE --with-tools --with-shared-lib --gcc=linux-gcc gmake
+```
+
+4.
+```# Build the shared library
+make -C .build/projects/gmake-linux-gcc bgfx-shared-lib config=release64
+
+# Build the tools you want (shaderc necessary for Technetium)
+make -C .build/projects/gmake-linux-gcc shaderc   config=release64
+make -C .build/projects/gmake-linux-gcc geometryc config=release64
+make -C .build/projects/gmake-linux-gcc geometryv config=release64
+make -C .build/projects/gmake-linux-gcc texturec  config=release64
+make -C .build/projects/gmake-linux-gcc texturev  config=release64
+```
+### Windows
+https://bkaradzic.github.io/bgfx/build.html
+
+## Building LuaJIT 2.1
+### Linux
+```cd src
+make clean
+make -j$(nproc) BUILDMODE=dynamic
+mkdir -p bin && \
+find -maxdepth 1 -type f \( -name '*.so'* -o -name '*.dll' -o -name '*.exe' -o -name 'luajit' \) -exec mv {} bin/ \;
+make clean
+```
+### Windows
+https://github.com/LuaJIT/LuaJIT
+
+## Building GLFW3
+### Linux
+```
+cmake -S . -B build \
+  -D CMAKE_BUILD_TYPE=Release \
+  -D BUILD_SHARED_LIBS=ON \            # ON for .so, OFF for static
+  -D GLFW_BUILD_DOCS=OFF \              # docs need extra tools; OFF for a quick build
+  -D GLFW_BUILD_TESTS=OFF \
+  -D GLFW_BUILD_EXAMPLES=OFF \
+  -D GLFW_BUILD_X11=ON \                # set to ON if you want X11
+  -D GLFW_BUILD_WAYLAND=OFF             # set to ON if you want Wayland
+cmake --build build -j
+```
+### Windows
+https://github.com/glfw/glfw/releases
+
+## Building Clay_Lua*
+Assumes LuaJIT shares a directory with Clay_Lua
+
+### Linux
+```make```
+
+cross-compiling for windows:
+```make win64 CC=x86_64-w64-mingw32-gcc```
+
