@@ -12,6 +12,7 @@ local stbi = require("ffi.ffi_stb_image")
 require("ffi.ffi_math")
 
 local font_cache = {}
+local INVALID_HANDLE = 0xffff
 local fonts = {
     [0] = "font/DejaVuSansMono.ttf",
     [1] = "font/georgia.ttf",
@@ -933,7 +934,41 @@ function M.generateTextVertices(font, text, x, y, r, g, b, a)
 end
 
 function M.addFont(path)
-	table.insert(fonts, path)
+    table.insert(fonts, path)
+end
+
+function M.shutdown()
+    for _, size_map in pairs(font_cache) do
+        for _, font in pairs(size_map) do
+            if font.pack_context ~= nil then
+                stbtt.PackEnd(font.pack_context)
+                font.pack_context = nil
+            end
+
+            if font.texture ~= nil and font.texture.idx ~= INVALID_HANDLE then
+                bgfx.bgfx_destroy_texture(font.texture)
+                font.texture = nil
+            end
+
+            if font.faces then
+                for key in pairs(font.faces) do
+                    font.faces[key] = nil
+                end
+                font.faces = nil
+            end
+
+            font.data = nil
+            font.info = nil
+            font.atlas_pixels = nil
+            font.rgba = nil
+            font.glyphs = nil
+            font.glyphs_first = nil
+            font.glyphs_count = nil
+            font.glyphs_face = nil
+        end
+    end
+
+    font_cache = {}
 end
 
 return M
