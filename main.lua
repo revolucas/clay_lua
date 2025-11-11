@@ -785,11 +785,64 @@ local function mainLoop()
     end
 end
 
--- Cleanup
 local function cleanup()
-    window.destroy()
-    bgfx.bgfx_shutdown()
+    local INVALID = 0xffff
+
+    if font_manager and font_manager.shutdown then
+        font_manager.shutdown()
+    end
+
+    local function destroy_uniform(handle)
+        if handle ~= nil and handle.idx ~= INVALID then
+            bgfx.bgfx_destroy_uniform(handle)
+        end
+    end
+
+    local function destroy_texture(handle)
+        if handle ~= nil and handle.idx ~= INVALID then
+            bgfx.bgfx_destroy_texture(handle)
+        end
+    end
+
+    local function destroy_program(handle)
+        if handle ~= nil and handle.idx ~= INVALID then
+            bgfx.bgfx_destroy_program(handle)
+        end
+    end
+
+    if device then
+        destroy_program(device.shader)
+        device.shader = nil
+
+        if device.vdecl_h ~= nil and device.vdecl_h.idx ~= INVALID then
+            bgfx.bgfx_destroy_vertex_layout(device.vdecl_h)
+        end
+        device.vdecl_h = nil
+
+        destroy_texture(device.white_tex)
+        device.white_tex = nil
+
+        destroy_uniform(device.s_texColor)
+        device.s_texColor = nil
+    end
+
+    destroy_uniform(u_transform2D)
+    destroy_uniform(u_rcParams)
+    destroy_uniform(u_rcCorner)
+    destroy_uniform(u_rcBorder)
+    destroy_uniform(u_borderColor)
+    destroy_uniform(u_mode)
+
+    u_transform2D = nil
+    u_rcParams = nil
+    u_rcCorner = nil
+    u_rcBorder = nil
+    u_borderColor = nil
+    u_mode = nil
+
     clay.shutdown()
+    bgfx.bgfx_shutdown()
+    window.destroy()
 end
 
 initialize()
