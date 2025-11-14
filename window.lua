@@ -7,10 +7,30 @@ local scroll_delta_x, scroll_delta_y = 0, 0 -- frame offset deltas
 local M = {}
 
 function M.create(config)
+    -- keep references to ffi callbacks so they aren't garbage collected
+	local CB_KEEP = {}
+	-- Safety calling
+	local function make_callback(ctype, func, ret_default)
+		local function wrapper(...)
+			local ok, res = xpcall(func, debug.traceback, ...)
+			if not ok then
+				io.stderr:write("\n[ffi-callback error]\n", res, "\n\n")
+				return ret_default  -- nil for void, 0 for int-returners
+			end
+			return res
+		end
+		local cb = ffi.cast(ctype, wrapper)
+		CB_KEEP[#CB_KEEP+1] = cb
+		return cb
+	end
+
     glfw.SetErrorCallback(
-        function(err, desc)
-            print(ffi.string(desc))
-        end
+        make_callback(
+            "GLFWerrorfun",
+            function(err, desc)
+                print(ffi.string(desc))
+            end
+        )
     )
 
     if (glfw.Init() == 0) then
@@ -45,31 +65,21 @@ function M.create(config)
     end
 
     local wnd = nil
-    if (fullscreen) then
+    if fullscreen then
         wnd = glfw.CreateWindow(width, height, "", monitor, nil)
     else
         wnd = glfw.CreateWindow(width, height, "", nil, nil)
         glfw.SetWindowPos(wnd, (mode.width - width) / 2, (mode.height - height) / 2)
     end
 
-    if (wnd == 0) then
+    if wnd == nil then
         glfw.Terminate()
         error("Glfw window creation failed")
     end
 
     _window = wnd
 
-    M.callback_send("window_creation", wnd, width, height) -- If using OpenGL remember to call glfw.MakeContextCurrent(wnd) here
-
-    glfw.PollEvents() -- crash fix for OSX
-
-    -- helper for creating and registering callbacks safely
-    M.__callbacks = {}
-    local function make_callback(ctype, func)
-        local cb = ffi.cast(ctype, func)
-        table.insert(M.__callbacks, cb) -- prevent GC
-        return cb
-    end
+    M.callback_send("window_creation", wnd, width, height) -- If using OpenGL instead of BGFX remember to call glfw.MakeContextCurrent(wnd) here
 
     glfw.SetWindowPosCallback(
         wnd,

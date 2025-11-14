@@ -62,24 +62,34 @@ ifeq ($(UNAME_S),Linux)
 
 endif
 
-# -------- Win64 (cross, needs MinGW-w64) --------
+# Detect a usable import lib and matching -l flag
+LUAJIT_IMPLIB := $(firstword \
+  $(wildcard $(LJ_LIB)/libluajit-5.1.dll.a) \
+  $(wildcard $(LJ_LIB)/liblua51.dll.a) \
+  $(wildcard $(LJ_LIB)/lua51.lib))
+
+# choose the correct -l name for the found import lib
+ifeq ($(findstring libluajit-5.1.dll.a,$(notdir $(LUAJIT_IMPLIB))),libluajit-5.1.dll.a)
+  LUAJIT_LFLAG := -lluajit-5.1
+else
+  LUAJIT_LFLAG := -llua51
+endif
+
 WIN_DLL_CLAY := $(WIN_SUBDIR)/$(MODULE).dll
 WIN_DLL_STBS := $(addprefix $(WIN_SUBDIR)/lib,$(addsuffix .dll,$(STB_NAMES)))
 
 .PHONY: win64
 win64: $(WIN_DLL_CLAY) $(WIN_DLL_STBS)
 
-# target-specific vars (Windows)
 $(WIN_SUBDIR)/%.dll: CC := $(CC_WIN64)
-$(WIN_SUBDIR)/%.dll: CFLAGS := -O2 -Isrc -I$(LJ_INC) -DWIN32 -fPIC
-# add static libgcc/libstdc++:
-$(WIN_SUBDIR)/%.dll: LDFLAGS := -L$(LJ_LIB) -lluajit-5.1 -Wl,--enable-auto-import -static-libgcc -static-libstdc++
+$(WIN_SUBDIR)/%.dll: CFLAGS := -O2 -Isrc -I$(LJ_INC) -DWIN32
+$(WIN_SUBDIR)/%.dll: LDFLAGS := -L$(LJ_LIB) $(LUAJIT_LFLAG) -Wl,--enable-auto-import -static-libgcc
 
-# clay dll
-$(WIN_DLL_CLAY): $(SRCS_CLAY) | $(WIN_SUBDIR)
+# clay dll (fail early if no import lib is present)
+$(WIN_DLL_CLAY): $(SRCS_CLAY) $(LUAJIT_IMPLIB) | $(WIN_SUBDIR)
 	$(CC) $(CFLAGS) -shared -o $@ $(SRCS_CLAY) $(LDFLAGS)
-	@[ -f $(LJ_LIB)/lua51.dll ] && cp -n $(LJ_LIB)/lua51.dll $(WIN_SUBDIR)/ 2>/dev/null || true
-	@[ -f $(LJ_LIB)/luajit.exe ] && cp -n $(LJ_LIB)/luajit.exe $(WIN_SUBDIR)/ 2>/dev/null || true
+	@cp -n $(LJ_LIB)/lua51.dll $(WIN_SUBDIR)/ 2>/dev/null || true
+	@cp -n $(LJ_LIB)/luajit.exe $(WIN_SUBDIR)/ 2>/dev/null || true
 
 # stb dlls (one per source)
 $(WIN_SUBDIR)/libstb_image.dll:      $(stb_image_src)     | $(WIN_SUBDIR)

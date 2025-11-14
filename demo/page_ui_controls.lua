@@ -26,6 +26,18 @@ local nodes = {
   }},
 }
 	
+local columns = {
+    { id="name",  title="Name",  width=220 },
+    { id="size",  title="Size",  width=80 },
+    { id="kind",  title="Type",  width=80 },
+}
+
+local rows = {
+    { name="main.lua",   size="4 KB",  kind="Lua"    },
+    { name="window.lua", size="3 KB",  kind="Lua"    },
+    { name="assets",     size="-",     kind="Folder" },
+}
+
 function layout(dt)
     -- CHECKBOX
     clay.checkbox(clay.id("demo_checkbox1"), "Do you exist?", false, nil)
@@ -115,8 +127,8 @@ function layout(dt)
             )
         end
     )
-	-- LISTVIEW
 
+	-- LISTVIEW
 	clay.listview(clay.id("ProjectTree"), {
 	  items = nodes,
 	  viewport_id = clay.id("ScrollViewport"),  -- enables row virtualization
@@ -184,6 +196,26 @@ function layout(dt)
         }, function()
 			clay.createTextElement(string.format("#%02X%02X%02X%02X", picked.r, picked.g, picked.b, picked.a), {fontId = 0, fontSize = 16, textColor = {r = 230, g = 230, b = 240, a = 255}})
         end
+    )
+    
+    -- TABLEVIEW
+    local api = clay.tableview(
+        clay.id("FileTable"),
+        { columns = columns, rows = rows },
+        {
+            viewport_id = clay.id("ScrollViewport"),
+            onActivate = function(row, idx)
+                print("Activated row", idx, row.name)
+            end,
+            cellRenderer = function(col, row, r, c)
+                -- e.g. custom icon in first column:
+                if col.id == "name" and row.kind == "Folder" then
+                    clay.createTextElement(ICO_FOLDER .. " " .. row.name, { fontId=1, fontSize=14 })
+                else
+                    clay.createTextElement(tostring(row[col.id] or ""), { fontId=1, fontSize=14 })
+                end
+            end,
+        }
     )
 
     -- RESIZABLE

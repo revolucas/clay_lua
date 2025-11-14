@@ -5,7 +5,6 @@ local band, bor, lshift = bit.band, bit.bor, bit.lshift
 local utf8 = require("utf8")
 local bgfx = require("ffi.ffi_bgfx")
 
-local window = require("window")
 local stbrt = require("ffi.ffi_stb_rect_pack")
 local stbtt = require("ffi.ffi_stb_truetype")
 local stbi = require("ffi.ffi_stb_image")
