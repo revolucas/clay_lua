@@ -65,104 +65,101 @@ function layout(dt)
 	end
 				
     clay.beginLayout()
+    
+local function C(c) return c.r, c.g, c.b, c.a end
 
-    clay.createElement(clay.id("Root"), {
-        layout = {
-            sizing = { width = clay.sizingFixed(device.width), height = clay.sizingFixed(device.height) },
-            layoutDirection = clay.TOP_TO_BOTTOM,
-        },
-        backgroundColor = COLOR_ROOT_BG
-    }, function()
+clay.element("Root")
+  :layoutDirection(clay.TOP_TO_BOTTOM)
+  :width(clay.SIZING_FIXED, device.width)
+  :height(clay.SIZING_FIXED, device.height)
+  :backgroundColor(C(COLOR_ROOT_BG))
+  :children(function()
 
-        clay.createElement(clay.id("Header"), {
-            layout = {
-                sizing = { width = clay.sizingGrow(), height = clay.sizingFixed(48) },
-                padding = clay.paddingAll(12)
-            },
-            backgroundColor = COLOR_HEADER_BG,
-            border = {
-                color = COLOR_WHITE_45,
-                width = { left=0, right=0, top=0, bottom=1 }
-            }
-        }, function()
-            clay.createTextElement(
-                "[shadow][b]Clay Demo:\t[color=#ffA0A0]LuaJIT 2.1[/color] + [color=#A0A0ff]BGFX[/color] + [color=#00ff00]GLFW[/color][/b][/shadow]",
-                { fontId=1, fontSize=16, textColor=COLOR_WHITE }
-            )
-        end)
+    clay.element("Header")
+      :width(clay.SIZING_GROW)
+      :height(clay.SIZING_FIXED, 48)
+      :padding(12)
+      :backgroundColor(C(COLOR_HEADER_BG))
+      :borderColor(C(COLOR_WHITE_45))
+      :borderWidth(0, 0, 0, 1) -- l,t,r,b
+      :children(function()
+        clay.text("[shadow][b]Clay Demo:\t[color=#ffA0A0]LuaJIT 2.1[/color] + [color=#A0A0ff]BGFX[/color] + [color=#00ff00]GLFW[/color][/b][/shadow]")
+          :fontId(1)
+          :fontSize(16)
+          :textColor(C(COLOR_WHITE))
+          :done()
+      end)
 
-        clay.createElement(clay.id("MainRow"), {
-            layout = {
-                layoutDirection = clay.LEFT_TO_RIGHT,
-                sizing = { width = clay.sizingGrow(), height = clay.sizingGrow() },
-                childGap = 0
-            }
-        }, function()
+    clay.element("MainRow")
+      :layoutDirection(clay.LEFT_TO_RIGHT)
+      :width(clay.SIZING_GROW)
+      :height(clay.SIZING_GROW)
+      :childGap(0)
+      :children(function()
 
-            clay.createElement(clay.id("Sidebar"), {
-                layout = {
-                    layoutDirection = clay.TOP_TO_BOTTOM,
-                    sizing = { width = clay.sizingFixed(220), height = clay.sizingGrow() },
-                    padding = clay.paddingAll(12),
-                    childGap = 8,
-                },
-                backgroundColor = COLOR_SIDEBAR_BG_BASE,
-                border = {
-                    color = COLOR_WHITE_32,
-                    width = { left=0, right=1, top=0, bottom=0 }
-                }
-            }, function()
-                for i, label in ipairs(pages) do
-                    SidebarItemComponent("[shadow][b]" .. label .. "[/b][/shadow]", i, down)
-                end
-            end)
+        clay.element("Sidebar")
+          :layoutDirection(clay.TOP_TO_BOTTOM)
+          :width(clay.SIZING_FIXED, 220)
+          :height(clay.SIZING_GROW)
+          :padding(12)
+          :childGap(8)
+          :backgroundColor(C(COLOR_SIDEBAR_BG_BASE))
+          :borderColor(C(COLOR_WHITE_32))
+          :borderWidth(0, 0, 1, 0) -- l,t,r,b
+          :children(function()
+            for i, label in ipairs(pages) do
+              SidebarItemComponent("[shadow][b]" .. label .. "[/b][/shadow]", i, down)
+            end
+          end)
 
-            clay.createElement(clay.id("Content"), {
-                layout = {
-                    sizing = { width = clay.sizingGrow(), height = clay.sizingGrow() },
-                    padding = clay.paddingAll(8),
-                    layoutDirection = clay.TOP_TO_BOTTOM
-                },
-                backgroundColor = COLOR_CONTENT_BG
-            }, function()
-                clay.createTextElement("Page: " .. pages[page_selected], {
-                    fontId=1, fontSize=16, textColor = { r=240, g=240, b=255, a=255 }
-                })
+        clay.element("Content")
+          :width(clay.SIZING_GROW)
+          :height(clay.SIZING_GROW)
+          :padding(8)
+          :layoutDirection(clay.TOP_TO_BOTTOM)
+          :backgroundColor(C(COLOR_CONTENT_BG))
+          :children(function()
 
-                clay.createElement(clay.id("Spacer"), {
-                    layout = { sizing = { width = clay.sizingGrow(), height = clay.sizingFixed(2) } }
-                })
-                
-                clay.createElement(clay.id("ScrollViewport"), {
-                    layout = {
-                        sizing = { width = clay.sizingFit(), height = clay.sizingGrow() },
-                        padding = clay.paddingLTRB(16, 16, 16, 0)
-                    },
-                    border = {
-                        color = COLOR_WHITE_24,
-                        width = { left=0, right=0, top=1, bottom=0 }
-                    },
-                    clip = { vertical = true, horizontal = false }
-                }, function()
-                    clay.createElement(clay.id("ScrollContent"), {
-                        layout = {
-                            sizing = { width = clay.sizingFit(), height = clay.sizingFit() },
-                            layoutDirection = clay.TOP_TO_BOTTOM,
-                            padding = clay.paddingAll(0),
-                            childGap = 12
-                        }
-                    }, function()
-                        local page_env = loadScript(page_paths[page_selected])
-                        if page_env and page_env.layout then
-							page_env.layout(dt)
-						end
-                    end)
+            clay.text("Page: " .. pages[page_selected])
+              :fontId(1)
+              :fontSize(16)
+              :textColor(240, 240, 255, 255)
+              :done()
 
-					local viewport_id = clay.id("ScrollViewport")
-					local content_id  = clay.id("ScrollContent")
-					clay.scrollbar(viewport_id, content_id, device.scroll.y, nil)
-                end)
-            end)
-        end)
-    end)
+            -- leaf element => explicit close
+            clay.element("Spacer")
+              :width(clay.SIZING_GROW)
+              :height(clay.SIZING_FIXED, 2)
+              :close()
+
+            clay.element("ScrollViewport")
+              :width(clay.SIZING_FIT)         -- matches clay.sizingFit()
+              :height(clay.SIZING_GROW)
+              :padding(16, 16, 16, 0)         -- L,T,R,B
+              :borderColor(C(COLOR_WHITE_24))
+              :borderWidth(0, 1, 0, 0)        -- top border only
+              :clip(false, true)              -- horizontal, vertical
+              :children(function()
+
+                clay.element("ScrollContent")
+                  :width(clay.SIZING_FIT)
+                  :height(clay.SIZING_FIT)
+                  :layoutDirection(clay.TOP_TO_BOTTOM)
+                  :padding(0)
+                  :childGap(12)
+                  :children(function()
+                    local page_env = loadScript(page_paths[page_selected])
+                    if page_env and page_env.layout then
+                      page_env.layout(dt)
+                    end
+                  end)
+
+                local viewport_id = clay.id("ScrollViewport")
+                local content_id  = clay.id("ScrollContent")
+                clay.scrollbar(viewport_id, content_id, device.scroll.y, nil)
+              end)
+          end)
+      end)
+  end)
+
 end
