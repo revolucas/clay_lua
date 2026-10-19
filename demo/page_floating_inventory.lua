@@ -1,4 +1,4 @@
-local glfw = require("ffi.ffi_glfw")
+local window = require("window")
 
 local function C(c) return c.r, c.g, c.b, c.a end
 
@@ -41,7 +41,7 @@ local function InventoryItem(i, label, mouse_down)
     :height(clay.SIZING_FIXED, 36)
     :padding(8)
     :childAlignment(clay.ALIGN_X_LEFT, clay.ALIGN_Y_CENTER)
-    :backgroundColor(hovered and 90 or 60, hovered and 90 or 60, hovered and 130 or 90, 255)
+    :backgroundColor(C(hovered and theme.colors.surfaceHover or theme.colors.surfaceRaised))
     :borderColor(255, 255, 255, 20)
     :borderWidth(0, 1, 0, 1) -- l,t,r,b
     :children(function()
@@ -51,8 +51,7 @@ local function InventoryItem(i, label, mouse_down)
         :done()
 
       if hovered and mouse_down and not draggingItem then
-        glfw.GetCursorPos(device.win, mouse_x, mouse_y)
-        dragStartX, dragStartY = mouse_x[0], mouse_y[0]
+        dragStartX, dragStartY = window.mousePosition()
         draggingItem = label
         dragSource = "inventory"
         dragStarted = false
@@ -72,7 +71,7 @@ local function EquipmentSlot(i, name, key, mouse_down)
     :width(clay.SIZING_FIXED, 140)
     :height(clay.SIZING_FIXED, 40)
     :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
-    :backgroundColor(hovered and 80 or 50, hovered and 80 or 50, hovered and 110 or 80, 255)
+    :backgroundColor(C(hovered and theme.colors.surfaceHover or theme.colors.surface))
     :borderColor(200, 200, 255, 60)
     :borderWidth(1)
     :children(function()
@@ -83,8 +82,7 @@ local function EquipmentSlot(i, name, key, mouse_down)
 
       -- start drag from slot
       if hovered and mouse_down and not draggingItem and item then
-        glfw.GetCursorPos(device.win, mouse_x, mouse_y)
-        dragStartX, dragStartY = mouse_x[0], mouse_y[0]
+        dragStartX, dragStartY = window.mousePosition()
         draggingItem = item
         dragSource = "slot:" .. key
         dragStarted = false
@@ -112,9 +110,8 @@ local function EquipmentSlot(i, name, key, mouse_down)
 end
 
 function layout(dt)
-  glfw.GetCursorPos(device.win, mouse_x, mouse_y)
-  local mx, my = mouse_x[0], mouse_y[0]
-  local mouse_down = glfw.GetMouseButton(device.win, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS
+  local mx, my = window.mousePosition()
+  local mouse_down = window.mouseButtonDown(window.MOUSE_BUTTON_LEFT)
 
   -- detect drag start
   if draggingItem and not dragStarted and mouse_down then
@@ -140,7 +137,7 @@ function layout(dt)
         :padding(8)
         :childGap(8)
         :clip(false, true) -- vertical scroll; childOffset defaults to Clay_GetScrollOffset() if omitted
-        :backgroundColor(40, 60, 90, 255)
+        :backgroundColor(C(theme.colors.surface))
         :borderColor(C(COLOR_WHITE_24))
         :borderWidth(0, 0, 1, 0) -- right border only
         :children(function()
@@ -167,7 +164,7 @@ function layout(dt)
         :height(clay.SIZING_GROW)
         :childGap(12)
         :padding(16)
-        :backgroundColor(30, 50, 80, 255)
+        :backgroundColor(C(theme.colors.surfaceRaised))
         :children(function()
           clay.text("Paper Doll (mock)")
             :fontId(1):fontSize(18)
@@ -185,16 +182,18 @@ function layout(dt)
   -- floating ghost follows mouse while dragging
   if draggingItem and dragStarted then
     clay.element("FloatingItem")
-      :attachTo(clay.ATTACH_TO_ROOT)
-      :attachPoints(clay.ATTACH_POINT_LEFT_TOP, clay.ATTACH_POINT_LEFT_TOP)
-      :offset(mx + 8, my + 8)
-      :zIndex(1000)
-      :pointerCaptureMode(clay.POINTER_CAPTURE_MODE_PASSTHROUGH)
-      :clipTo(clay.CLIP_TO_NONE)
+      :floating()
+        :root()
+        :attach("lt", "lt")
+        :offset(mx + 8, my + 8)
+        :zIndex(1000)
+        :pointerCaptureMode(clay.POINTER_CAPTURE_MODE_PASSTHROUGH)
+        :clipTo(clay.CLIP_TO_NONE)
+        :done()
       :width(clay.SIZING_FIXED, 160)
       :height(clay.SIZING_FIXED, 32)
       :childAlignment(clay.ALIGN_X_LEFT, clay.ALIGN_Y_CENTER)
-      :backgroundColor(255, 255, 255, 32)
+      :backgroundColor(C(theme.colors.borderSubtle))
       :borderColor(C(COLOR_WHITE_45))
       :borderWidth(1)
       :children(function()

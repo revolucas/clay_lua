@@ -1,21 +1,37 @@
 ffi = require("ffi")
 
+local function script_dir()
+  local src = debug.getinfo(1, "S").source
+  if src:sub(1, 1) == "@" then
+    src = src:sub(2)
+  end
+  return (src:match("^(.*)[/\\]") or ".")
+end
+
 if ffi.os == "Windows" then
-	package.cpath = "./bin/x64/?.dll;" .. package.cpath
+	local dir = script_dir()
+	local bin = dir .. "/bin/x64"
+	bin = bin:gsub("/", "\\")
+
+	package.cpath = bin .. "\\?.dll;" .. package.cpath
 
 	-- Set DLL directory (necessary for ffi.load)
 	ffi.cdef[[
 		int __stdcall SetDllDirectoryA(const char* lpPathName);
 	]]
 
-	ffi.C.SetDllDirectoryA("bin/x64")
+	ffi.C.SetDllDirectoryA(bin)
 elseif ffi.os == "Linux" then
-	package.cpath = "./bin/linux64/?.so;" .. package.cpath
+	local dir = script_dir()
+	package.cpath = dir .. "/bin/linux64/?.so;" .. package.cpath
 end
 
 clay = require("clay") -- global make project-wide
+theme = require("theme") -- global reusable color/spacing/type tokens
+clay.theme = theme -- native :style(alias) scopes resolve through this table
+theme.syncGlobals()
 bgfx = require("ffi.ffi_bgfx") -- global make project-wide
-glfw = require("ffi.ffi_glfw") -- global make project-wide
+local shader_manager = require("shader_manager")
 
 local stbrt = require("ffi.ffi_stb_rect_pack")
 local stbtt = require("ffi.ffi_stb_truetype")
@@ -49,21 +65,6 @@ device.clay_memory = nil
 device.clay_arena = nil
 device.scroll = {x = 0, y = 0}
 
--- Color palette
-COLOR_NONE = { r = 0, g = 0, b = 0, a = 0 }
-COLOR_WHITE = {r = 255, g = 255, b = 255, a = 255}
-COLOR_WHITE_24 = {r = 255, g = 255, b = 255, a = 24}
-COLOR_WHITE_32 = {r = 255, g = 255, b = 255, a = 32}
-COLOR_WHITE_45 = {r = 255, g = 255, b = 255, a = 45}
-
-COLOR_HEADER_BG = {r = 35, g = 56, b = 90, a = 255}
-COLOR_ROOT_BG = {r = 50, g = 80, b = 120, a = 255}
-COLOR_CONTENT_BG = {r = 30, g = 46, b = 75, a = 255}
-
-COLOR_SIDEBAR_BG_BASE = {r = 60, g = 78, b = 110, a = 255}
-COLOR_SIDEBAR_BG_HOV = {r = 85, g = 105, b = 150, a = 255}
-COLOR_SIDEBAR_BG_ACT = {r = 40, g = 60, b = 95, a = 255}
-
 -- Shader uniforms
 u_transform2D = nil
 u_rcParams = nil
@@ -71,9 +72,6 @@ u_rcCorner = nil
 u_rcBorder = nil
 u_borderColor = nil
 u_mode = nil
-
-mouse_x = ffi.new("double[1]")
-mouse_y = ffi.new("double[1]")
 
 cache = {}
 function loadScript(filename)
@@ -113,35 +111,6 @@ function loadScript(filename)
 		io.stderr:write(res, "\n")
 		return nil
 	end
-end
-
-local function create_shader_from_file(filename)
-	local file = io.open(filename, "rb")
-
-	assert(file, filename .. "not found")
-
-	local source = file:read("*a")
-	file:close()
-
-	local mem = bgfx.bgfx_copy(ffi.cast("char *", source), #source)
-	local shader = bgfx.bgfx_create_shader(mem)
-	if (shader == nil) then
-		print("failed to create shader " .. filename)
-		return
-	end
-
-	return shader
-end
-
--- Load BGFX shader
-local function load_shader(vs_path, fs_path)
-	local vs = create_shader_from_file(vs_path)
-	local fs = create_shader_from_file(fs_path)
-	if vs == nil or fs == nil then
-		error("Shader load failed")
-	end
-	local program = bgfx.bgfx_create_program(vs, fs, true)
-	return program
 end
 
 -- Helper to generate vertices for a rectangle
@@ -277,26 +246,23 @@ local function init_bgfx()
 	bgfx_init_s[0].deviceId = 0
 	bgfx_init_s[0].debug = false
 	bgfx_init_s[0].profile = false
-	bgfx_init_s[0].resolution.width = device.width
-	bgfx_init_s[0].resolution.height = device.height
-	bgfx_init_s[0].resolution.reset = bgfx.BGFX_RESET_VSYNC
-	bgfx_init_s[0].resolution.format = bgfx.BGFX_TEXTURE_FORMAT_RGBA8
+	bgfx_init_s[0].swapChain.width = device.width
+	bgfx_init_s[0].swapChain.height = device.height
+	bgfx_init_s[0].swapChain.flags = 0
+	bgfx_init_s[0].swapChain.formatColor = bgfx.BGFX_TEXTURE_FORMAT_RGBA8
+	device.bgfx_reset_flags = bgfx.BGFX_RESET_VSYNC
+	bgfx_init_s[0].reset = device.bgfx_reset_flags
 
-	-- Retrieve platform data
-	if (ffi.os == "Windows") then
-		local nwh = ffi.cast("void*", glfw.GetWin32Window(device.win))
-		bgfx_init_s[0].platformData.nwh = nwh
-	elseif (ffi.os == "OSX") then
-		local nwh = ffi.cast("void*", glfw.GetCocoaWindow(device.win))
-		bgfx_init_s[0].platformData.nwh = nwh
-	elseif (ffi.os == "Linux") then
-		local nwh = ffi.cast("void *", glfw.GetX11Window(device.win))
-		local ndt = ffi.cast("void *", glfw.GetX11Display())
-		bgfx_init_s[0].platformData.nwh = nwh
-		bgfx_init_s[0].platformData.ndt = ndt
-	else
-		error("Unsupported platform: " .. ffi.os)
-	end
+	-- RGFW supplies the native window and display handles BGFX needs.
+	local nwh, ndt, handle_type = window.nativeHandles()
+	bgfx_init_s[0].swapChain.nwh = nwh
+	bgfx_init_s[0].swapChain.ndt = ndt
+	bgfx_init_s[0].platformData.type = handle_type
+
+	-- BGFX reset takes a pointer to the full swap-chain description in this API.
+	-- Keep a stable copy so resize callbacks can update it and reset the backbuffer.
+	device.bgfx_main_swap_chain_s = ffi.new("bgfx_swap_chain_t[1]")
+	device.bgfx_main_swap_chain_s[0] = bgfx_init_s[0].swapChain
 
 	-- Initialize bgfx
 	bgfx.bgfx_init(bgfx_init_s[0])
@@ -306,9 +272,11 @@ local function init_bgfx()
 	local renderer = bgfx.bgfx_get_renderer_name(bgfx.bgfx_get_renderer_type())
 	print("renderer:", renderer ~= nil and ffi.string(renderer) or "unknown")
 
-	local video_flags = 0
-	bgfx.bgfx_reset(device.width, device.height, video_flags, bgfx_init_s[0].resolution.format)
-	bgfx.bgfx_set_view_rect(device.view_id, 0, 0, device.width, device.height)
+	device.bgfx_main_swap_chain_s[0].width = device.width
+	device.bgfx_main_swap_chain_s[0].height = device.height
+	device.bgfx_main_swap_chain_s[0].flags = 0
+	bgfx.bgfx_reset(device.bgfx_reset_flags, device.bgfx_main_swap_chain_s)
+	bgfx.bgfx_set_view_rect(device.view_id, 0, 0, device.width, device.height, 0.0, 1.0)
 	bgfx.bgfx_set_view_clear(device.view_id, bgfx.BGFX_CLEAR_COLOR + bgfx.BGFX_CLEAR_DEPTH, 0x336666ff, 1.0, 0)
 	
 	return true
@@ -333,20 +301,15 @@ local function initialize()
 			error("Failed to initialize Clay")
 		end
 
-		clay.setMeasureTextFunction(font_manager.measureText)
+		if clay.setMeasureTextFastFunction and font_manager.measureTextFast then
+			clay.setMeasureTextFastFunction(font_manager.measureTextFast)
+		else
+			clay.setMeasureTextFunction(font_manager.measureText)
+		end
 	end
 
-	print("binding shaders")
-	-- If windows use opengl if linux use vulkan
-	local vs_shader = "shader/spriv/clay.vs.bin"
-	local fs_shader = "shader/spriv/clay.fs.bin"
-	
-	if ffi.os == "Windows" then
-		vs_shader = "shader/glsl/clay.vs.bin"
-		fs_shader = "shader/glsl/clay.fs.bin"	
-	end
-	
-	device.shader = load_shader(vs_shader, fs_shader)
+	print("compiling and binding shaders")
+	device.shader = shader_manager.load_clay_program(script_dir())
 
 	device.vdecl = ffi.new("bgfx_vertex_layout_t[1]")
 	bgfx.bgfx_vertex_layout_begin(device.vdecl, bgfx.bgfx_get_renderer_type())
@@ -402,8 +365,8 @@ local function initialize()
 	window.callback_register(
 		"mouse_scroll",
 		function(delta_x, delta_y, x, y)
-			device.scroll.x = y
-			device.scroll.y = y
+			device.scroll.x = delta_x
+			device.scroll.y = delta_y
 		end
 	)
 
@@ -417,9 +380,12 @@ local function initialize()
 			device.height = h
 
 			-- Reset BGFX to new size
-			local format = bgfx.BGFX_TEXTURE_FORMAT_RGBA8
-			bgfx.bgfx_reset(w, h, bgfx.BGFX_RESET_VSYNC, format)
-			bgfx.bgfx_set_view_rect(device.view_id, 0, 0, w, h)
+			local swap_chain = device.bgfx_main_swap_chain_s
+			swap_chain[0].width = w
+			swap_chain[0].height = h
+			swap_chain[0].flags = 0
+			bgfx.bgfx_reset(device.bgfx_reset_flags, swap_chain)
+			bgfx.bgfx_set_view_rect(device.view_id, 0, 0, w, h, 0.0, 1.0)
 
 			-- Update Clay and projection matrix
 			if clay then
@@ -441,24 +407,33 @@ local function initialize()
 		clay.property = loadScript("component/property.lua").property
 		clay.resizable = loadScript("component/resizable.lua").resizable
 		clay.color_picker = loadScript("component/color_picker.lua").color_picker
+		clay.dropdown = loadScript("component/dropdown.lua").dropdown
 		
 		local M = loadScript("component/listview.lua")
 		clay.listview = M.listview
-		clay.listview_open = M.listview_open
+        clay.listview_open = M.listview_open
 		clay.listview_close = M.listview_close
         
         clay.tableview = loadScript("component/tableview.lua").tableview
+		local node_editor = loadScript("component/node_editor.lua")
+		clay.node_editor = node_editor.node_editor
+		clay.node = node_editor.node
 	end
 end
 
 local clipStack = {}
 
 local function pushScissor(x, y, w, h)
-	-- TODO: Clamp to view size if needed.
-	x = math.max(0, math.floor(x or 0))
-	y = math.max(0, math.floor(y or 0))
-	w = math.max(0, math.floor(w or 0))
-	h = math.max(0, math.floor(h or 0))
+	x, y = math.floor(x or 0), math.floor(y or 0)
+	w, h = math.max(0, math.floor(w or 0)), math.max(0, math.floor(h or 0))
+	local x1, y1 = math.min(device.width, x + w), math.min(device.height, y + h)
+	x, y = math.min(device.width, math.max(0, x)), math.min(device.height, math.max(0, y))
+	local parent = clipStack[#clipStack]
+	if parent then
+		x, y = math.max(x, parent.x), math.max(y, parent.y)
+		x1, y1 = math.min(x1, parent.x + parent.w), math.min(y1, parent.y + parent.h)
+	end
+	w, h = math.max(0, x1 - x), math.max(0, y1 - y)
 	table.insert(clipStack, {x = x, y = y, w = w, h = h})
 	bgfx.bgfx_set_scissor(x, y, w, h)
 end
@@ -481,11 +456,130 @@ local function applyTopScissor()
 	end
 end
 
+-- Render a graph's grid and all its wires with one transient-buffer submit.
+local function drawNodeEditorCanvas(x, y, w, h, payload)
+	local wires = payload.wires or {}
+	local pending = payload.pending
+	local selectionRect = payload.selectionRect
+	local zoom = tonumber(payload.zoom) or 1
+	local gridStep = math.max(12, (tonumber(payload.gridSize) or 32) * zoom)
+	local gridSegments = math.ceil(w / gridStep) + math.ceil(h / gridStep) + 2
+	local wireSegments = (#wires + (pending and 1 or 0)) * 16
+	local selectionSegments = selectionRect and 4 or 0
+	local segmentCapacity = math.min(16000, gridSegments + wireSegments + selectionSegments)
+	if segmentCapacity < 1 then return end
+
+	local vertexCapacity, indexCapacity = segmentCapacity * 4, segmentCapacity * 6
+	local availVertices = bgfx.bgfx_get_avail_transient_vertex_buffer(vertexCapacity, device.vdecl)
+	local availIndices = bgfx.bgfx_get_avail_transient_index_buffer(indexCapacity, false)
+	segmentCapacity = math.min(segmentCapacity, math.floor(availVertices / 4), math.floor(availIndices / 6))
+	if segmentCapacity < 1 then return end
+
+	vertexCapacity, indexCapacity = segmentCapacity * 4, segmentCapacity * 6
+	local tvb, tib = ffi.new("bgfx_transient_vertex_buffer_t[1]"), ffi.new("bgfx_transient_index_buffer_t[1]")
+	tib[0].isIndex16 = true
+	bgfx.bgfx_alloc_transient_vertex_buffer(tvb, vertexCapacity, device.vdecl)
+	bgfx.bgfx_alloc_transient_index_buffer(tib, indexCapacity, false)
+	local vertices = ffi.cast("Vertex*", tvb[0].data)
+	local indices = ffi.cast("uint16_t*", tib[0].data)
+	local vertexCount, indexCount, segmentCount = 0, 0, 0
+	local normalSegmentCapacity = selectionRect and segmentCapacity >= 4 and segmentCapacity - 4 or segmentCapacity
+	local selectionPass = false
+
+	local function emitSegment(x0, y0, x1, y1, width, color)
+		local limit = selectionPass and segmentCapacity or normalSegmentCapacity
+		if segmentCount >= limit then return false end
+		local dx, dy = x1 - x0, y1 - y0
+		local length = math.sqrt(dx * dx + dy * dy)
+		if length < 0.001 then return true end
+		local half = (width or 1) * 0.5
+		local nx, ny = -dy / length * half, dx / length * half
+		local r = math.max(0, math.min(255, color.r or 255))
+		local g = math.max(0, math.min(255, color.g or 255))
+		local b = math.max(0, math.min(255, color.b or 255))
+		local a = math.max(0, math.min(255, color.a or 255))
+		local v = vertexCount
+		vertices[v + 0] = { x + x0 + nx, y + y0 + ny, 0.5, 0.5, r, g, b, a }
+		vertices[v + 1] = { x + x0 - nx, y + y0 - ny, 0.5, 0.5, r, g, b, a }
+		vertices[v + 2] = { x + x1 - nx, y + y1 - ny, 0.5, 0.5, r, g, b, a }
+		vertices[v + 3] = { x + x1 + nx, y + y1 + ny, 0.5, 0.5, r, g, b, a }
+		indices[indexCount + 0] = v + 0
+		indices[indexCount + 1] = v + 1
+		indices[indexCount + 2] = v + 2
+		indices[indexCount + 3] = v + 0
+		indices[indexCount + 4] = v + 2
+		indices[indexCount + 5] = v + 3
+		vertexCount, indexCount, segmentCount = vertexCount + 4, indexCount + 6, segmentCount + 1
+		return true
+	end
+
+	local gridColor = payload.gridColor or { r=86, g=103, b=132, a=46 }
+	local gridX = (payload.panX or 0) % gridStep
+	local gridY = (payload.panY or 0) % gridStep
+	while gridX < w and segmentCount < segmentCapacity do
+		emitSegment(gridX, 0, gridX, h, 1, gridColor)
+		gridX = gridX + gridStep
+	end
+	while gridY < h and segmentCount < segmentCapacity do
+		emitSegment(0, gridY, w, gridY, 1, gridColor)
+		gridY = gridY + gridStep
+	end
+
+	local function emitCurve(edge)
+		local x0, y0, x1, y1 = edge.x0, edge.y0, edge.x1, edge.y1
+		local bend = math.max(28 * zoom, math.abs(x1 - x0) * 0.48)
+		local direction = x1 >= x0 and 1 or -1
+		local c1x, c1y = x0 + bend * direction, y0
+		local c2x, c2y = x1 - bend * direction, y1
+		local lastX, lastY = x0, y0
+		local color = edge.color or { r=180, g=191, b=211, a=235 }
+		for step = 1, 16 do
+			local t = step / 16
+			local inv = 1 - t
+			local px = inv * inv * inv * x0 + 3 * inv * inv * t * c1x + 3 * inv * t * t * c2x + t * t * t * x1
+			local py = inv * inv * inv * y0 + 3 * inv * inv * t * c1y + 3 * inv * t * t * c2y + t * t * t * y1
+			if not emitSegment(lastX, lastY, px, py, edge.width or 2.2 * zoom, color) then return false end
+			lastX, lastY = px, py
+		end
+		return true
+	end
+
+	for i = 1, #wires do
+		if not emitCurve(wires[i]) then break end
+	end
+	if pending and segmentCount < segmentCapacity then emitCurve(pending) end
+	if selectionRect and segmentCapacity - segmentCount >= 4 then
+		selectionPass = true
+		local x0, y0 = selectionRect.x, selectionRect.y
+		local x1, y1 = x0 + selectionRect.w, y0 + selectionRect.h
+		local color, lineWidth = selectionRect.color, selectionRect.width or 1.5
+		emitSegment(x0, y0, x1, y0, lineWidth, color)
+		emitSegment(x1, y0, x1, y1, lineWidth, color)
+		emitSegment(x1, y1, x0, y1, lineWidth, color)
+		emitSegment(x0, y1, x0, y0, lineWidth, color)
+	end
+	if indexCount == 0 then return end
+
+	bgfx.bgfx_set_transient_vertex_buffer(0, tvb, 0, vertexCount)
+	bgfx.bgfx_set_transient_index_buffer(tib, 0, indexCount)
+	bgfx.bgfx_set_texture(0, device.s_texColor, device.white_tex, 0xffffffff)
+	bgfx.bgfx_set_uniform(u_transform2D, ffi.new("float[4]", 1, 1, 0, 0), 1)
+	bgfx.bgfx_set_uniform(u_rcBorder, ffi.new("float[4]", 0, 0, 0, 0), 1)
+	bgfx.bgfx_set_uniform(u_rcCorner, ffi.new("float[4]", 0, 0, 0, 0), 1)
+	bgfx.bgfx_set_uniform(u_rcParams, ffi.new("float[4]", 0, 0, 0, 0), 1)
+	bgfx.bgfx_set_uniform(u_borderColor, ffi.new("float[4]", 0, 0, 0, 0), 1)
+	local state = bit.bor(bgfx.BGFX_STATE_WRITE_RGB, bgfx.BGFX_STATE_WRITE_A,
+		bgfx.BGFX_STATE_BLEND_ALPHA, bgfx.BGFX_STATE_MSAA)
+	bgfx.bgfx_set_state(state, 0)
+	applyTopScissor()
+	bgfx.bgfx_submit(device.view_id, device.shader, 0, bgfx.BGFX_DISCARD_ALL)
+end
+
 -- Main loop
 local function mainLoop()
 	local lastTime = window.time()
 	while not window.shouldClose() do
-		local currentTime = glfw.GetTime()
+		local currentTime = window.time()
 		local dt = currentTime - lastTime
 		lastTime = currentTime
 
@@ -507,8 +601,9 @@ local function mainLoop()
 			if clay then
 				
 				local vertexStride = ffi.sizeof("Vertex")
-				for cmd in clay.endLayoutIter() do
-					local t = cmd:type()
+				for t, x, y, w, h, r, g, b, a, tl, tr, bl, br, left, right, top, bottom,
+						text, fontId, fontSize, letterSpacing, lineHeight, payload, clipH, clipV
+						in clay.endLayoutFast(dt) do
 
 					-- Safe defaults before any bgfx_submit()
 					bgfx.bgfx_set_uniform(u_rcBorder, ffi.new("float[4]", 0, 0, 0, 0), 1)
@@ -517,10 +612,6 @@ local function mainLoop()
 					bgfx.bgfx_set_uniform(u_rcParams, ffi.new("float[4]", 0, 0, 0, 0), 1)
 
 					if t == clay.RENDER_RECTANGLE then
-						local x, y, w, h = cmd:bounds()
-						local r, g, b, a = cmd:color()
-						local tl, tr, bl, br = cmd:cornerRadius()
-
 						-- Convention: if all 4 radii are negative, draw an *inscribed circle*.
 						local drawCircle = (tl < 0 and tr < 0 and bl < 0 and br < 0)
 
@@ -571,12 +662,6 @@ local function mainLoop()
 							bgfx.bgfx_submit(device.view_id, device.shader, 0, bgfx.BGFX_DISCARD_ALL)
 						end
 					elseif t == clay.RENDER_BORDER then
-						local x, y, w, h = cmd:bounds()
-						local r, g, b, a = cmd:color()
-
-						local left, right, top, bottom = cmd:borderWidth()
-						local tl, tr, bl, br = cmd:cornerRadius()
-
 						local circle = (tl < 0 and tr < 0 and bl < 0 and br < 0)
 
 						if circle and left > 0 then
@@ -664,47 +749,54 @@ local function mainLoop()
 							end
 						end
 					elseif t == clay.RENDER_TEXT then
-						local text, fontId, fontSize, letterSpacing, lineHeight = cmd:text()
-						local r, g, b, a = cmd:color()
-						local x, y = cmd:bounds()
-
 						local font = font_manager.load(fontId, fontSize)
 						if text and #text > 0 and font then
-							local vertices, indices, vertCount, idxCount, decorations = font_manager.generateTextVertices(font, text, x, y, r, g, b, a)
+							local vertices, indices, vertCount, idxCount, decorations, textBatches = font_manager.generateTextVertices(font, text, x, y, r, g, b, a)
 
-							local tvb = ffi.new("bgfx_transient_vertex_buffer_t[1]")
-							local tib = ffi.new("bgfx_transient_index_buffer_t[1]")
-							tib[0].isIndex16 = true
+							local batches = textBatches
+							if not batches or #batches == 0 then
+								batches = {{vertices=vertices, indices=indices, vertCount=vertCount, idxCount=idxCount, texture=font.texture}}
+							end
 
-							if bgfx.bgfx_get_avail_transient_vertex_buffer(vertCount, device.vdecl) < vertCount then
-								print("Warning: Not enough transient buffer space")
-							else
-								bgfx.bgfx_alloc_transient_vertex_buffer(tvb, vertCount, device.vdecl)
-								bgfx.bgfx_alloc_transient_index_buffer(tib, idxCount, false)
+							for _, batch in ipairs(batches) do
+								if batch.vertCount > 0 and batch.idxCount > 0 then
+									local tvb = ffi.new("bgfx_transient_vertex_buffer_t[1]")
+									local tib = ffi.new("bgfx_transient_index_buffer_t[1]")
+									tib[0].isIndex16 = true
 
-								ffi.copy(tvb[0].data, vertices, vertexStride * vertCount)
-								ffi.copy(tib[0].data, indices, ffi.sizeof("uint16_t") * idxCount)
+									local vertex_available = bgfx.bgfx_get_avail_transient_vertex_buffer(batch.vertCount, device.vdecl)
+									local index_available = bgfx.bgfx_get_avail_transient_index_buffer(batch.idxCount, true)
+									if vertex_available < batch.vertCount or index_available < batch.idxCount then
+										print("Warning: Not enough transient buffer space for text")
+									else
+										bgfx.bgfx_alloc_transient_vertex_buffer(tvb, batch.vertCount, device.vdecl)
+										bgfx.bgfx_alloc_transient_index_buffer(tib, batch.idxCount, false)
 
-								bgfx.bgfx_set_transient_vertex_buffer(0, tvb, 0, vertCount)
-								bgfx.bgfx_set_transient_index_buffer(tib, 0, idxCount)
-								bgfx.bgfx_set_texture(0, device.s_texColor, font.texture, 0xffffffff)
-								bgfx.bgfx_set_uniform(u_transform2D, ffi.new("float[4]", 1, 1, 0, 0), 1)
+										ffi.copy(tvb[0].data, batch.vertices, vertexStride * batch.vertCount)
+										ffi.copy(tib[0].data, batch.indices, ffi.sizeof("uint16_t") * batch.idxCount)
 
-								local state =
-									bit.bor(
-									bgfx.BGFX_STATE_WRITE_RGB,
-									bgfx.BGFX_STATE_WRITE_A,
-									bgfx.BGFX_STATE_MSAA,
-									bgfx.BGFX_STATE_BLEND_FUNC_SEPARATE(
-										bgfx.BGFX_STATE_BLEND_ONE,
-										bgfx.BGFX_STATE_BLEND_INV_SRC_ALPHA,
-										bgfx.BGFX_STATE_BLEND_ONE,
-										bgfx.BGFX_STATE_BLEND_INV_SRC_ALPHA
+										bgfx.bgfx_set_transient_vertex_buffer(0, tvb, 0, batch.vertCount)
+										bgfx.bgfx_set_transient_index_buffer(tib, 0, batch.idxCount)
+										bgfx.bgfx_set_texture(0, device.s_texColor, batch.texture or font.texture, 0xffffffff)
+										bgfx.bgfx_set_uniform(u_transform2D, ffi.new("float[4]", 1, 1, 0, 0), 1)
+
+										local state =
+										bit.bor(
+										bgfx.BGFX_STATE_WRITE_RGB,
+										bgfx.BGFX_STATE_WRITE_A,
+										bgfx.BGFX_STATE_MSAA,
+										bgfx.BGFX_STATE_BLEND_FUNC_SEPARATE(
+											bgfx.BGFX_STATE_BLEND_ONE,
+											bgfx.BGFX_STATE_BLEND_INV_SRC_ALPHA,
+											bgfx.BGFX_STATE_BLEND_ONE,
+											bgfx.BGFX_STATE_BLEND_INV_SRC_ALPHA
+										)
 									)
-								)
-								bgfx.bgfx_set_state(state, 0)
-								applyTopScissor()
-								bgfx.bgfx_submit(device.view_id, device.shader, 0, bgfx.BGFX_DISCARD_ALL)
+									bgfx.bgfx_set_state(state, 0)
+									applyTopScissor()
+									bgfx.bgfx_submit(device.view_id, device.shader, 0, bgfx.BGFX_DISCARD_ALL)
+								end
+								end
 							end
 							
 							if decorations and #decorations > 0 then
@@ -763,11 +855,6 @@ local function mainLoop()
 							end
 						end
 					elseif t == clay.RENDER_IMAGE then
-						local r, g, b, a = cmd:color()
-						local tl, tr, bl, br = cmd:cornerRadius()
-						local idx = cmd:imageData()
-
-						local x, y, w, h = cmd:bounds()
 						local vertices, indices = generateRectangleVertices(x, y, w, h, 255, 255, 255, 255)
 						local vertCount = 4
 						local idxCount = 6
@@ -788,7 +875,7 @@ local function mainLoop()
 							bgfx.bgfx_set_transient_vertex_buffer(0, tvb, 0, vertCount)
 							bgfx.bgfx_set_transient_index_buffer(tib, 0, idxCount)
 							
-							local tex_h = idx and ffi.new("bgfx_texture_handle_t",idx) or device.white_tex
+							local tex_h = payload and ffi.new("bgfx_texture_handle_t",payload) or device.white_tex
 							bgfx.bgfx_set_texture(0, device.s_texColor, tex_h, 0xffffffff)
 							bgfx.bgfx_set_uniform(u_transform2D, ffi.new("float[4]", 1, 1, 0, 0), 1)
 						
@@ -797,8 +884,6 @@ local function mainLoop()
 							bgfx.bgfx_submit(device.view_id, device.shader, 0, bgfx.BGFX_DISCARD_ALL)
 						end
 					elseif t == clay.RENDER_SCISSOR_START then
-						local x, y, w, h = cmd:bounds()
-						local clipH, clipV = cmd:clip()
 						if not clipH then
 							x, w = 0, device.width
 						end
@@ -809,12 +894,10 @@ local function mainLoop()
 					elseif t == clay.RENDER_SCISSOR_END then
 						popScissor()
 					elseif t == clay.RENDER_CUSTOM then
-						local r, g, b, a = cmd:color()
-						local tl, tr, bl, br = cmd:cornerRadius()
-						local passthrough = cmd:customData()
-					
+						if type(payload) == "table" and payload.kind == "clay_node_editor_canvas" then
+							drawNodeEditorCanvas(x, y, w, h, payload)
+						end
 						applyTopScissor()
-						bgfx.bgfx_submit(device.view_id, device.shader, 0, bgfx.BGFX_DISCARD_ALL)
 					end
 				end
 			end

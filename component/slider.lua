@@ -1,5 +1,6 @@
 -- component/slider.lua (new builder API + no per-call default table churn)
-local glfw = require("ffi.ffi_glfw")
+local window = require("window")
+local theme = require("theme")
 
 local _slider_state = _slider_state or {} -- [id] -> { active, focused, lastDown }
 local _slider_keys  = _slider_keys  or {} -- key edge table
@@ -12,26 +13,11 @@ local SLIDER_DEFAULT = {
   max = 1,
   step = 0,
   pageStep = nil, -- computed if nil
-  width = 200,
-  height = 24,
-  pad = 0,
   disabled = false,
 
   trackThickness = nil,       -- computed from height if nil
   thumbThickness = nil,       -- computed from height if nil
-  thumbCornerRadius = 8,
 
-  colors = {
-    bg       = { r=30,  g=30,  b=35,  a=0   },
-    bgHov    = { r=40,  g=40,  b=48,  a=0   },
-    bgAct    = { r=55,  g=55,  b=65,  a=0   },
-    bgborder = { r=255, g=255, b=255, a=0   },
-    border   = { r=255, g=255, b=255, a=50  },
-    track    = { r=90,  g=90,  b=100, a=140 },
-    thumb    = { r=120, g=170, b=255, a=255 },
-    fill     = { r=120, g=170, b=255, a=180 },
-    disable  = { r=120, g=120, b=120, a=90  },
-  }
 }
 
 local function clamp(x,a,b) if x<a then return a elseif x>b then return b else return x end end
@@ -43,7 +29,7 @@ local function snap_step(x, step)
 end
 
 local function key_edge(win, key, keyTable)
-  local cur  = (glfw.GetKey(win, key) == glfw.PRESS)
+  local cur  = (window.keyDown(key))
   local last = keyTable[key] or false
   keyTable[key] = cur
   return (cur and not last), cur
@@ -51,7 +37,7 @@ end
 
 function slider(elid, value, opts)
   local def = SLIDER_DEFAULT
-  local dcol = def.colors
+  local dcol = theme.colors.slider
   local col = opts and opts.colors
 
   -- opts
@@ -65,16 +51,17 @@ function slider(elid, value, opts)
     pageStep = (step > 0 and step * 10 or (maxv - minv) * 0.1)
   end
 
-  local width  = (opts and opts.width)  or def.width
-  local height = (opts and opts.height) or def.height
-  local pad    = (opts and opts.pad)    or def.pad
+  local componentDefaults = theme.defaults.slider
+  local width  = (opts and opts.width)  or componentDefaults.width
+  local height = (opts and opts.height) or componentDefaults.height
+  local pad    = (opts and opts.pad)    or componentDefaults.padding
   local disabled = ((opts and opts.disabled) or def.disabled) == true
 
   local trackThickness = (opts and opts.trackThickness) or def.trackThickness
   if not trackThickness then trackThickness = math.max(6, math.floor(height * 0.30)) end
   local thumbThickness = (opts and opts.thumbThickness) or def.thumbThickness
   if not thumbThickness then thumbThickness = math.max(6, math.floor(height * 0.60)) end
-  local thumbCornerRad = (opts and opts.thumbCornerRadius) or def.thumbCornerRadius
+  local thumbCornerRad = (opts and opts.thumbCornerRadius) or theme.radius.control
 
   local c_bg      = (col and col.bg)      or dcol.bg
   local c_bgHov   = (col and col.bgHov)   or dcol.bgHov
@@ -110,9 +97,8 @@ function slider(elid, value, opts)
   end
 
   -- input
-  glfw.GetCursorPos(device.win, mouse_x, mouse_y)
-  local mx, my = mouse_x[0], mouse_y[0]
-  local down = (glfw.GetMouseButton(device.win, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS)
+  local mx, my = window.mousePosition()
+  local down = (window.mouseButtonDown(window.MOUSE_BUTTON_LEFT))
   local hovered = clay.pointerOver(elid)
 
   local changed = false
@@ -155,17 +141,17 @@ function slider(elid, value, opts)
     -- keyboard nudges
     if st.focused then
       local shift =
-        (glfw.GetKey(device.win, glfw.KEY_LEFT_SHIFT) == glfw.PRESS) or
-        (glfw.GetKey(device.win, glfw.KEY_RIGHT_SHIFT) == glfw.PRESS)
+        (window.keyDown(window.KEY_LEFT_SHIFT)) or
+        (window.keyDown(window.KEY_RIGHT_SHIFT))
 
       local deltaSmall = (step > 0 and step or (maxv - minv) * 0.01)
       local deltaBig = pageStep
 
-      if select(1, key_edge(device.win, glfw.KEY_RIGHT, _slider_keys)) then
+      if select(1, key_edge(device.win, window.KEY_RIGHT, _slider_keys)) then
         value = clamp(value + (shift and deltaBig or deltaSmall), minv, maxv)
         changed = true
       end
-      if select(1, key_edge(device.win, glfw.KEY_LEFT, _slider_keys)) then
+      if select(1, key_edge(device.win, window.KEY_LEFT, _slider_keys)) then
         value = clamp(value - (shift and deltaBig or deltaSmall), minv, maxv)
         changed = true
       end

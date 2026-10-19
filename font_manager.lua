@@ -17,6 +17,43 @@ local fonts = {
     [1] = "font/georgia.ttf",
     [2] = "font/codicon.ttf"
 }
+local font_aliases = {}
+local font_paths = {}
+local next_font_id = 0
+
+local function normalize_font_path(path)
+    if type(path) ~= "string" or path == "" then return nil end
+    return path:gsub("\\", "/")
+end
+
+local function font_alias_name(alias)
+    local path = normalize_font_path(alias)
+    if not path then return nil end
+    local base = path:match("([^/]+)$") or path
+    return base:gsub("%.[^%.]+$", "")
+end
+
+local function normalize_font_alias(alias)
+    local name = font_alias_name(alias)
+    return name and name:lower() or nil
+end
+
+do
+    local max_id = -1
+    for font_id, path in pairs(fonts) do
+        if type(font_id) == "number" and font_id > max_id then
+            max_id = font_id
+        end
+        local normalized = normalize_font_path(path)
+        if normalized then
+            fonts[font_id] = normalized
+            font_paths[normalized] = font_id
+            local alias = normalize_font_alias(normalized)
+            if alias then font_aliases[alias] = font_id end
+        end
+    end
+    next_font_id = max_id + 1
+end
 
 -- Faux style defaults (tweak to taste)
 local STYLE = {
@@ -24,9 +61,14 @@ local STYLE = {
   bold_passes    = 2,     -- 1 = off, >=2 thickens
   bold_px        = 1.0,   -- pixel offset per pass
   shadow		 = false,  -- override, always on
+  shadow_strength = 1.0,
   shadow_dx      = 1.5,
   shadow_dy      = 1.5,
   shadow_color   = {r=0, g=0, b=0, a=160},
+  outline        = false,
+  outline_size   = 1,
+  outline_strength = 1.0,
+  outline_color  = {r=0, g=0, b=0, a=255},
 }
 
 -- face helpers ----------------------------------------------------
@@ -439,6 +481,45 @@ function M.load(font_id, font_size)
     return font
 end
 
+function M.id(alias)
+    if alias == nil then return 0 end
+    if type(alias) == "number" then return alias end
+    if type(alias) ~= "string" then return nil end
+
+    local base_alias = normalize_font_alias(alias)
+    if not base_alias then return nil end
+    if font_aliases[base_alias] ~= nil then
+        return font_aliases[base_alias]
+    end
+
+    local lower = alias:lower()
+    local has_path = alias:find("[/\\]") ~= nil
+    local path
+    if has_path or lower:match("%.ttf$") or lower:match("%.otf$") then
+        path = normalize_font_path(alias)
+    else
+        path = "font/" .. font_alias_name(alias) .. ".ttf"
+    end
+
+    local path_key = path
+    if path_key and font_paths[path_key] ~= nil then
+        local font_id = font_paths[path_key]
+        font_aliases[base_alias] = font_id
+        return font_id
+    end
+
+    local file = path and io.open(path, "rb")
+    if not file then return nil end
+    file:close()
+
+    local font_id = next_font_id
+    next_font_id = next_font_id + 1
+    fonts[font_id] = path
+    font_paths[path_key] = font_id
+    font_aliases[base_alias] = font_id
+    return font_id
+end
+
 -- hex color parser: "#RRGGBB" or "#RRGGBBAA" (AA optional)
 local function parse_hex_color(s, curA)
     s = s:gsub("^#","")
@@ -450,153 +531,259 @@ local function parse_hex_color(s, curA)
     return r or 255, g or 255, b or 255, a or (curA or 255)
 end
 
--- reusable tables to avoid churn
-local colorStack   = {}
-local fontStack    = {}
-local sizeStack    = {}
-local buf = {}
+local function copy_color(color)
+    return {r = color.r, g = color.g, b = color.b, a = color.a}
+end
 
--- Rich text -> segments
--- Supports:
---   [color=#RRGGBB[AA]] ... [/color]
---   [font=ID] ... [/font]
---   [size=PX] ... [/size]
---   [kerning=on|off]
---   [cp=0xHEX]  or  [u+XXXX] (inject cp)
---   [br] (newline)
---   [b] [/b], [i] [/i], [strike] [/strike]  (flags kept in segment; not drawn here)
---   Literal [[ -> '[' in text
-local function parseRichText(text, r, g, b, a, baseFontId, baseFontSize)
-    local segments = {}
+local function clone_rich_style(style)
+    local clone = {}
+    for key, value in pairs(style) do
+        clone[key] = type(value) == "table" and copy_color(value) or value
+    end
+    return clone
+end
 
-    -- stacks
-	colorStack[1] = {r=r, g=g, b=b, a=a}
-	fontStack[1] = baseFontId
-	sizeStack[1] = baseFontSize
+local function clamp01(value, fallback)
+    local number = tonumber(value)
+    if number == nil then return fallback end
+    return math.max(0, math.min(1, number))
+end
 
-    local kernOn       = true
-    local bold, italic, strike, shadow = false, false, false, false
+local function parse_style_attributes(attributes)
+    local values = {}
+    if not attributes or attributes == "" then return values end
+    attributes = attributes:gsub("[,;]", " ")
+    for key, value in attributes:gmatch("([%w_]+)%s*=%s*([^%s]+)") do
+        values[key:lower()] = value
+    end
+    return values
+end
 
-    local function curColor() return colorStack[#colorStack] end
-    local function curFont()  return fontStack[#fontStack] end
-    local function curSize()  return sizeStack[#sizeStack] end
-
-    -- make a segment with current state
-    local function push_text(t)
-        if #t == 0 then return end
-        table.insert(segments, {
-            text   = t,
-            color  = { r=curColor().r, g=curColor().g, b=curColor().b, a=curColor().a },
-            fontId = curFont(),
-            fontSize = curSize(),
-            kern   = kernOn,
-            bold   = bold, italic = italic, strike = strike, shadow = shadow
-        })
+local function apply_shadow_style(style, value, attributes)
+    style.shadow = true
+    if value and value ~= "" then
+        if value:find("=", 1, true) then
+            attributes = attributes and (value .. ";" .. attributes) or value
+        elseif value:sub(1, 1) == "#" then
+            local rr, gg, bb, aa = parse_hex_color(value, style.shadow_color.a)
+            style.shadow_color = {r=rr, g=gg, b=bb, a=aa}
+        else
+            style.shadow_strength = clamp01(value, style.shadow_strength)
+        end
     end
 
-    -- scan
-    local i, n = 1, #text
+    local values = parse_style_attributes(attributes)
+    if values.strength or values.s then
+        style.shadow_strength = clamp01(values.strength or values.s, style.shadow_strength)
+    end
+    if values.color or values.colour then
+        local rr, gg, bb, aa = parse_hex_color(values.color or values.colour, style.shadow_color.a)
+        style.shadow_color = {r=rr, g=gg, b=bb, a=aa}
+    end
+    if values.alpha or values.a then
+        local alpha = tonumber(values.alpha or values.a)
+        if alpha then
+            if alpha >= 0 and alpha <= 1 then alpha = alpha * 255 end
+            style.shadow_color.a = math.floor(math.max(0, math.min(255, alpha)) + 0.5)
+        end
+    end
+    style.shadow_dx = tonumber(values.x or values.dx) or style.shadow_dx
+    style.shadow_dy = tonumber(values.y or values.dy) or style.shadow_dy
+end
+
+local function apply_outline_style(style, value, attributes)
+    style.outline = true
+    if value and value ~= "" then
+        if value:find("=", 1, true) then
+            attributes = attributes and (value .. ";" .. attributes) or value
+        elseif value:sub(1, 1) == "#" then
+            local rr, gg, bb, aa = parse_hex_color(value, style.outline_color.a)
+            style.outline_color = {r=rr, g=gg, b=bb, a=aa}
+        else
+            style.outline_size = tonumber(value) or style.outline_size
+        end
+    end
+
+    local values = parse_style_attributes(attributes)
+    local size = tonumber(values.size or values.radius)
+    if size then style.outline_size = math.max(0, math.min(2, math.floor(size + 0.5))) end
+    local strength = tonumber(values.strength or values.s)
+    if strength then style.outline_strength = clamp01(strength, style.outline_strength) end
+    if values.color or values.colour then
+        local rr, gg, bb, aa = parse_hex_color(values.color or values.colour, style.outline_color.a)
+        style.outline_color = {r=rr, g=gg, b=bb, a=aa}
+    end
+end
+
+-- Rich text uses a complete style stack so nesting and repeated tags restore
+-- the exact previous color, font, and effects when their closing tag appears.
+local function parseRichText(text, r, g, b, a, baseFontId, baseFontSize)
+    text = tostring(text or "")
+    local segments = {}
+    local stack = {{
+        tag = "__root",
+        style = {
+            color = {r=r or 255, g=g or 255, b=b or 255, a=a or 255},
+            fontId = baseFontId,
+            fontSize = baseFontSize,
+            kern = true,
+            bold = false,
+            italic = false,
+            strike = false,
+            shadow = false,
+            shadow_strength = 1,
+            shadow_color = {r=0, g=0, b=0, a=STYLE.shadow_color.a},
+            shadow_dx = STYLE.shadow_dx,
+            shadow_dy = STYLE.shadow_dy,
+            outline = false,
+            outline_size = 1,
+            outline_strength = 1,
+            outline_color = copy_color(STYLE.outline_color),
+        },
+    }}
+    local buf = {}
+
+    local function current_style()
+        return stack[#stack].style
+    end
+
+    local function push_text(value)
+        if not value or #value == 0 then return end
+        local style = current_style()
+        segments[#segments + 1] = {
+            text = value,
+            color = copy_color(style.color),
+            fontId = style.fontId,
+            fontSize = style.fontSize,
+            kern = style.kern,
+            bold = style.bold,
+            italic = style.italic,
+            strike = style.strike,
+            shadow = style.shadow,
+            shadow_strength = style.shadow_strength,
+            shadow_color = copy_color(style.shadow_color),
+            shadow_dx = style.shadow_dx,
+            shadow_dy = style.shadow_dy,
+            outline = style.outline,
+            outline_size = style.outline_size,
+            outline_strength = style.outline_strength,
+            outline_color = copy_color(style.outline_color),
+        }
+    end
+
     local function flush()
-        if #buf > 0 then
-            push_text(table.concat(buf))
-            for j=#buf, 1, -1 do
-				table.remove(buf,j)
+        if #buf == 0 then return end
+        push_text(table.concat(buf))
+        for index = #buf, 1, -1 do buf[index] = nil end
+    end
+
+    local function push_style(tag, mutate)
+        flush()
+        local style = clone_rich_style(current_style())
+        mutate(style)
+        stack[#stack + 1] = {tag=tag, style=style}
+    end
+
+    local function pop_style(tag)
+        flush()
+        for index = #stack, 2, -1 do
+            if stack[index].tag == tag then
+                while #stack >= index do stack[#stack] = nil end
+                return
             end
         end
     end
 
-    while i <= n do
-        local c = text:sub(i,i)
+    local function push_codepoint(value)
+        local codepoint = tonumber(value)
+        if codepoint and codepoint >= 0 and codepoint <= 0x10FFFF
+            and not (codepoint >= 0xD800 and codepoint <= 0xDFFF) then
+            push_text(utf8.char(codepoint))
+        end
+    end
 
-        -- escape "["
-        if c == "[" then
-            if text:sub(i,i+1) == "[[" then
-                table.insert(buf, "[")
-                i = i + 2
-            else
-				local s, e = text:find("%b[]", i)
-				if s == i and e then
-					local raw = text:sub(i+1, e-1)                 -- content without [ ]
-					local is_close = raw:match("^%s*/") ~= nil     -- starts with '/'
-					raw = raw:gsub("^%s*/%s*", "")                -- remove leading '/'
-					raw = raw:match("^%s*(.-)%s*$") or raw         -- trim
-
-					-- cmd[=value] parse (value optional)
-					local cmd, value = raw:match("^([%w_]+)%s*=%s*(.-)%s*$")
-					if not cmd then cmd, value = raw, nil end
-					cmd = (cmd or ""):lower()
-
-					if is_close then
-						-- ---------- closing tags ----------
-						flush()
-						if     cmd == "color"  then if #colorStack > 1 then table.remove(colorStack) end
-						elseif cmd == "font"   then if #fontStack  > 1 then table.remove(fontStack)  end
-						elseif cmd == "size"   then if #sizeStack  > 1 then table.remove(sizeStack)  end
-						elseif cmd == "b"      then bold   = false
-						elseif cmd == "i"      then italic = false
-						elseif cmd == "strike" then strike = false
-						elseif cmd == "shadow" then shadow = false
-						-- [/kerning] -> restore default-on (optional)
-						elseif cmd == "kerning" then kernOn = true
-						else
-							-- unknown close tag -> ignore
-						end
-					else
-						-- ---------- opening / self-closing ----------
-						if cmd == "color" and value then
-							flush()
-							local rr, gg, bb, aa = parse_hex_color(value, curColor().a)
-							table.insert(colorStack, {r=rr, g=gg, b=bb, a=aa})
-						elseif cmd == "font" and value then
-							flush()
-							local fid = tonumber(value) or curFont()
-							table.insert(fontStack, fid)
-						elseif cmd == "size" and value then
-							flush()
-							local px = tonumber(value) or curSize()
-							table.insert(sizeStack, px)
-						elseif cmd == "kerning" and value then
-							flush()
-							local v = value:lower()
-							kernOn = (v == "on" or v == "true" or v == "1")
-						elseif cmd == "b" then
-							flush(); bold = true
-						elseif cmd == "i" then
-							flush(); italic = true
-						elseif cmd == "strike" then
-							flush(); strike = true
-						elseif cmd == "shadow" then
-						  flush(); shadow = true
-						elseif cmd == "br" then
-							table.insert(buf, "\n")
-						elseif cmd == "cp" and value then
-							flush()
-							local cp = tonumber(value) or (value:match("^0x%x+$") and tonumber(value))
-							if cp then push_text(utf8.char(cp)) end
-						else
-							-- [u+XXXX] or [U+XXXX]
-							local up = raw:match("^[Uu]%+([%x]+)$")
-							if up then
-								flush()
-								local cp = tonumber("0x"..up)
-								if cp then push_text(utf8.char(cp)) end
-							else
-								-- unknown tag -> treat literally
-								table.insert(buf, text:sub(i, e))
-							end
-						end
-					end
-
-					i = e + 1
-				else
-					-- stray '['
-					table.insert(buf, c)
-					i = i + 1
-				end
-            end
-        else
-            table.insert(buf, c)
+    local i = 1
+    while i <= #text do
+        if text:sub(i, i) ~= "[" then
+            buf[#buf + 1] = text:sub(i, i)
             i = i + 1
+        elseif text:sub(i, i + 1) == "[[" then
+            buf[#buf + 1] = "["
+            i = i + 2
+        else
+            local start_at, end_at = text:find("%b[]", i)
+            if start_at ~= i or not end_at then
+                buf[#buf + 1] = "["
+                i = i + 1
+            else
+                local original = text:sub(i, end_at)
+                local raw = text:sub(i + 1, end_at - 1)
+                local closing = raw:match("^%s*/") ~= nil
+                raw = raw:gsub("^%s*/%s*", "")
+                raw = raw:match("^%s*(.-)%s*$") or raw
+
+                local shadow_attributes = not closing and raw:match("^shadow%s+(.+)$") or nil
+                local outline_attributes = not closing and raw:match("^outline%s+(.+)$") or nil
+                local command, value = raw:match("^([%w_]+)%s*=%s*(.-)%s*$")
+                if shadow_attributes then
+                    command, value = "shadow", nil
+                elseif outline_attributes then
+                    command, value = "outline", nil
+                elseif not command then
+                    command = raw
+                end
+                command = (command or ""):lower()
+
+                if closing then
+                    if command == "color" or command == "font" or command == "size"
+                        or command == "kerning" or command == "b" or command == "i"
+                        or command == "strike" or command == "shadow" or command == "outline" then
+                        pop_style(command)
+                    end
+                elseif command == "color" and value then
+                    push_style("color", function(style)
+                        local rr, gg, bb, aa = parse_hex_color(value, style.color.a)
+                        style.color = {r=rr, g=gg, b=bb, a=aa}
+                    end)
+                elseif command == "font" and value then
+                    push_style("font", function(style)
+                        style.fontId = tonumber(value) or M.id(value) or style.fontId
+                    end)
+                elseif command == "size" and value then
+                    push_style("size", function(style)
+                        style.fontSize = tonumber(value) or style.fontSize
+                    end)
+                elseif command == "kerning" and value then
+                    push_style("kerning", function(style)
+                        local setting = value:lower()
+                        style.kern = setting == "on" or setting == "true" or setting == "1"
+                    end)
+                elseif command == "b" or command == "i" or command == "strike" then
+                    push_style(command, function(style) style[command] = true end)
+                elseif command == "shadow" then
+                    push_style("shadow", function(style)
+                        apply_shadow_style(style, value, shadow_attributes)
+                    end)
+                elseif command == "outline" then
+                    push_style("outline", function(style)
+                        apply_outline_style(style, value, outline_attributes)
+                    end)
+                elseif command == "br" then
+                    buf[#buf + 1] = "\n"
+                elseif command == "cp" and value then
+                    flush()
+                    push_codepoint(value)
+                else
+                    local hex = raw:match("^[Uu]%+([%x]+)$")
+                    if hex then
+                        flush()
+                        push_codepoint("0x" .. hex)
+                    else
+                        buf[#buf + 1] = original
+                    end
+                end
+                i = end_at + 1
+            end
         end
     end
 
@@ -611,86 +798,193 @@ end
 --]]
 local measure_cache = {}
 
-function M.measureText(text, config, skip_tags)
-    local font_id  = config.fontId
-    local font_px  = config.fontSize
-    local key = string.format("%d:%d:%s", font_id, font_px, text)
+function M.clearMeasureCache()
+    measure_cache = {}
+end
+
+local function font_line_metrics(font)
+    local cached = font._clay_line_metrics
+    if cached then return cached end
+
+    local ascent = ffi.new("int[1]")
+    local descent = ffi.new("int[1]")
+    local gap = ffi.new("int[1]")
+    stbtt.GetFontVMetrics(font.info, ascent, descent, gap)
+
+    local metrics = {
+        ascent = ascent[0] * font.scale,
+        descent = -(descent[0] * font.scale),
+        gap = gap[0] * font.scale,
+    }
+    metrics.descent = math.max(0, metrics.descent)
+    metrics.gap = math.max(0, metrics.gap)
+    metrics.advance = metrics.ascent + metrics.descent + metrics.gap
+    if metrics.advance <= 0 then metrics.advance = math.max(1, font.size or 1) end
+
+    font._clay_line_metrics = metrics
+    return metrics
+end
+
+local function measure_run_width(font, text, kern_on, start_x)
+    start_x = start_x or 0
+    local width = start_x
+    local previous_cp, previous_face = nil, nil
+
+    for codepoint in utf8_iter_fast(text) do
+        if codepoint == 9 then
+            width = start_x + math.floor((width - start_x) / font.tab_advance + 1) * font.tab_advance
+            previous_cp, previous_face = 9, font.id
+        elseif codepoint == 32 then
+            width = width + font.space_advance
+            previous_cp, previous_face = 32, font.id
+        elseif codepoint == 13 then
+            previous_cp, previous_face = nil, nil
+        elseif codepoint ~= 10 then
+            ensurePacked(font, codepoint)
+            local _, _, face_id = findPackedGlyph(font, codepoint)
+            face_id = face_id or font.id
+
+            if kern_on ~= false and previous_cp and previous_face == face_id then
+                width = width + kernAdjust(font, face_id, previous_cp, codepoint)
+            end
+            width = width + getGlyphAdvanceFace(font, face_id, codepoint)
+            previous_cp, previous_face = codepoint, face_id
+        end
+    end
+
+    return width - start_x
+end
+
+local function layout_rich_text_lines(segments, base_font)
+    local base_metrics = font_line_metrics(base_font)
+    local lines = {}
+
+    local function new_line()
+        return {
+            runs = {},
+            width = 0,
+            visual_width = 0,
+            ascent = base_metrics.ascent,
+            descent = base_metrics.descent,
+            gap = base_metrics.gap,
+            advance = base_metrics.advance,
+            shadow_down = 0,
+        }
+    end
+
+    local line = new_line()
+    local function include_metrics(metrics)
+        line.ascent = math.max(line.ascent, metrics.ascent)
+        line.descent = math.max(line.descent, metrics.descent)
+        line.gap = math.max(line.gap, metrics.gap)
+        line.advance = math.max(line.advance, line.ascent + line.descent + line.gap)
+    end
+
+    local function append_run(segment, segment_font, text)
+        local metrics = font_line_metrics(segment_font)
+        include_metrics(metrics)
+        if #text == 0 then return end
+
+        local width = measure_run_width(segment_font, text, segment.kern, line.width)
+        line.runs[#line.runs + 1] = {
+            text = text,
+            segment = segment,
+            font = segment_font,
+            metrics = metrics,
+            x = line.width,
+            width = width,
+        }
+        line.width = line.width + width
+
+        local visual_right = line.width
+        if segment.shadow then
+            local strength = segment.shadow_strength
+            if strength == nil then strength = STYLE.shadow_strength or 1 end
+            local dx = tonumber(segment.shadow_dx)
+            if dx == nil then dx = STYLE.shadow_dx or 0 end
+            local dy = tonumber(segment.shadow_dy)
+            if dy == nil then dy = STYLE.shadow_dy or 0 end
+            if strength > 0 and dx > 0 then visual_right = visual_right + dx end
+            if strength > 0 then line.shadow_down = math.max(line.shadow_down, dy) end
+        end
+        if segment.outline then
+            local outline_size = tonumber(segment.outline_size) or STYLE.outline_size or 1
+            visual_right = visual_right + math.max(0, math.min(2, outline_size))
+        end
+        line.visual_width = math.max(line.visual_width, visual_right)
+    end
+
+    local function finish_line()
+        line.visual_width = math.max(line.visual_width, line.width)
+        lines[#lines + 1] = line
+        line = new_line()
+    end
+
+    for _, segment in ipairs(segments) do
+        local segment_font =
+            (segment.fontId ~= base_font.id or segment.fontSize ~= base_font.size)
+            and M.load(segment.fontId, segment.fontSize)
+            or base_font
+        segment_font = segment_font or base_font
+        local metrics = font_line_metrics(segment_font)
+        local start_at = 1
+
+        while true do
+            local newline = segment.text:find("\n", start_at, true)
+            local slice = newline and segment.text:sub(start_at, newline - 1)
+                or segment.text:sub(start_at)
+            include_metrics(metrics)
+            append_run(segment, segment_font, slice)
+            if not newline then break end
+            finish_line()
+            start_at = newline + 1
+        end
+    end
+
+    finish_line()
+    return lines
+end
+
+local function measure_text(text, font_id, font_px, skip_tags)
+    text = tostring(text or "")
+    local key = string.format("%d:%d:%s:%s", font_id, font_px, skip_tags and "literal" or "rich", text)
     local cached = measure_cache[key]
     if cached then return cached[1], cached[2] end
 
-    local baseFont = M.load(font_id, font_px)
-    if not baseFont then return 0, 0 end
+    local base_font = M.load(font_id, font_px)
+    if not base_font then return 0, 0 end
 
-    local clean_segments
+    local segments
     if skip_tags then
-        clean_segments = { { text = text, color={r=255,g=255,b=255,a=255}, fontId=font_id, fontSize=font_px, kern=true } }
+        segments = {{
+            text = text,
+            color = {r=255, g=255, b=255, a=255},
+            fontId = font_id,
+            fontSize = font_px,
+            kern = true,
+        }}
     else
-        clean_segments = parseRichText(text, 255,255,255,255, font_id, font_px)
+        segments = parseRichText(text, 255, 255, 255, 255, font_id, font_px)
     end
 
-    local totalWidth, totalHeight = 0, 0
-    local lineWidth = 0
-    local lineAscent, lineDescent, lineGap = 0, 0, 0
-    local lineAdvance = 0
-
-    local function set_line_metrics(fnt)
-        local a = ffi.new("int[1]"); local d = ffi.new("int[1]"); local g = ffi.new("int[1]")
-        stbtt.GetFontVMetrics(fnt.info, a, d, g)
-        lineAscent  = a[0] * fnt.scale
-        lineDescent = d[0] * fnt.scale
-        lineGap     = g[0] * fnt.scale
-        lineAdvance = (lineAscent - lineDescent + lineGap)
+    local lines = layout_rich_text_lines(segments, base_font)
+    local total_width, total_height = 0, 0
+    for _, line in ipairs(lines) do
+        total_width = math.max(total_width, line.visual_width)
+        total_height = total_height + line.advance
     end
-    set_line_metrics(baseFont)
+    if #lines > 0 then total_height = total_height + lines[#lines].shadow_down end
 
-    local prev_cp, prev_face = nil, nil
-    local xpos = 0
+    measure_cache[key] = {total_width, total_height}
+    return total_width, total_height
+end
 
-    for _, seg in ipairs(clean_segments) do
-        local segFont = ((seg.fontId ~= font_id or seg.fontSize ~= font_px) and M.load(seg.fontId, seg.fontSize)) or baseFont
-        if segFont ~= baseFont then
-            set_line_metrics(segFont)
-        end
+function M.measureText(text, config, skip_tags)
+    return measure_text(text, config.fontId, config.fontSize, skip_tags)
+end
 
-        for cp in utf8_iter_fast(seg.text) do
-            if cp == 10 then -- newline
-                if lineWidth > totalWidth then totalWidth = lineWidth end
-                totalHeight = totalHeight + lineAdvance
-                xpos = 0; lineWidth = 0
-                prev_cp, prev_face = nil, nil
-            elseif cp == 9 then -- tab
-                local rel = xpos
-                xpos = math.floor(rel / segFont.tab_advance + 1) * segFont.tab_advance
-                lineWidth = xpos
-                prev_cp, prev_face = 9, segFont.id
-            elseif cp == 32 then -- space
-                xpos = xpos + segFont.space_advance
-                lineWidth = xpos
-                prev_cp, prev_face = 32, segFont.id
-            else
-                -- ensure glyph available in this font or donors
-                ensurePacked(segFont, cp)
-                local pack, base, faceIdx = findPackedGlyph(segFont, cp)
-
-                -- kerning (same face only, if enabled)
-                if seg.kern and prev_cp and prev_face == faceIdx then
-                    xpos = xpos + kernAdjust(segFont, faceIdx, prev_cp, cp)
-                end
-
-                -- advance by glyph
-                xpos = xpos + getGlyphAdvanceFace(segFont, faceIdx or segFont.id, cp)
-                lineWidth = xpos
-                prev_cp, prev_face = cp, faceIdx or segFont.id
-            end
-        end
-    end
-
-    if lineWidth > totalWidth then totalWidth = lineWidth end
-    -- at least one line height
-    if totalHeight == 0 then totalHeight = lineAdvance end
-
-    measure_cache[key] = { totalWidth, totalHeight }
-    return totalWidth, totalHeight
+function M.measureTextFast(text, font_id, font_px)
+    return measure_text(text, font_id, font_px, false)
 end
 
 -- Helper for text vertices using stbtt packed atlas
@@ -717,18 +1011,34 @@ local function generateTextVerticesRaw(font, text, x, y, r, g, b, a, style)
     
     -- style flags (nil-safe)
     style = style or {}
-    local italic_shear   = (style.italic and (style.italic_shear or STYLE.italic_shear)) or 0
-	local bold_passes    = (style.bold and (style.bold_passes  or STYLE.bold_passes)) or 1
+    local tab_origin = style.tab_origin or x
+    local kern_on = style.kern ~= false
+    local italic_shear = (style.italic and (style.italic_shear or STYLE.italic_shear)) or 0
+	local bold_passes = (style.bold and (style.bold_passes or STYLE.bold_passes)) or 1
 	if bold_passes < 1 then bold_passes = 1 end
-	local bold_px        = style.bold_px or STYLE.bold_px
-	local shadow_on      = style.shadow == true or STYLE.shadow == true
-	local shadow_dx      = (style.shadow_dx or STYLE.shadow_dx)
-	local shadow_dy      = (style.shadow_dy or STYLE.shadow_dy)
-	local shcol          = style.shadow_color or STYLE.shadow_color
+	local bold_px = style.bold_px or STYLE.bold_px
+	local shadow_strength = clamp01(style.shadow_strength, STYLE.shadow_strength or 1)
+	local shadow_on = (style.shadow == true or STYLE.shadow == true) and shadow_strength > 0
+	local shadow_dx = tonumber(style.shadow_dx) or STYLE.shadow_dx or 0
+	local shadow_dy = tonumber(style.shadow_dy) or STYLE.shadow_dy or 0
+	local shcol = style.shadow_color or STYLE.shadow_color
+	local outline_strength = clamp01(style.outline_strength, STYLE.outline_strength or 1)
+	local outline_size = math.floor((tonumber(style.outline_size) or STYLE.outline_size or 1) + 0.5)
+	outline_size = math.max(0, math.min(2, outline_size))
+	local outline_on = (style.outline == true or STYLE.outline == true)
+		and outline_strength > 0 and outline_size > 0
+	local outcol = style.outline_color or STYLE.outline_color
+	local outline_offsets = {}
+	if outline_on then
+		for oy = -outline_size, outline_size do
+			for ox = -outline_size, outline_size do
+				if ox ~= 0 or oy ~= 0 then outline_offsets[#outline_offsets + 1] = {ox, oy} end
+			end
+		end
+	end
 
-    -- Each printable codepoint can emit up to:
-    --   shadow_on ? 1 : 0  (shadow)  +  bold_passes  (main + extra bold offsets)
-    local max_passes_per_cp = bold_passes + (shadow_on and 1 or 0)
+    -- Each glyph may emit shadow, outline dilation, and bold/main passes.
+    local max_passes_per_cp = bold_passes + (shadow_on and 1 or 0) + #outline_offsets
 
     -- Upper bound on “codepoints that draw” is ≤ #text (bytes) – safe over-alloc
     local nbytes = #text
@@ -785,12 +1095,14 @@ local function generateTextVerticesRaw(font, text, x, y, r, g, b, a, style)
 
     for c in utf8_iter_fast(text) do
         if c == 9 then
-            local rel = xpos[0] - x
-            xpos[0] = math.floor(rel / font.tab_advance + 1) * font.tab_advance + x
+            local rel = xpos[0] - tab_origin
+            xpos[0] = math.floor(rel / font.tab_advance + 1) * font.tab_advance + tab_origin
             prev_cp, prev_face = 9, font.id
         elseif c == 32 then
             xpos[0] = xpos[0] + font.space_advance
             prev_cp, prev_face = 32, font.id
+        elseif c == 13 then
+            prev_cp, prev_face = nil, nil
         else
             local pack, base, faceIdx = findPackedGlyph(font, c)
 			if not pack then
@@ -815,8 +1127,8 @@ local function generateTextVerticesRaw(font, text, x, y, r, g, b, a, style)
                 xpos[0] = xpos[0] + getGlyphAdvance(font, c)
                 prev_cp, prev_face = c, font.id
             else
-                -- kerning if same face
-                if prev_cp and prev_face == faceIdx then
+                -- kerning if enabled and the previous glyph used the same face
+                if kern_on and prev_cp and prev_face == faceIdx then
                     xpos[0] = xpos[0] + kernAdjust(font, faceIdx, prev_cp, c)
                 end
 
@@ -826,10 +1138,23 @@ local function generateTextVerticesRaw(font, text, x, y, r, g, b, a, style)
 				
 				-- 1) shadow pass (behind text)
 				if shadow_on then
-					emit_quad(q, shcol.r, shcol.g, shcol.b, shcol.a, shadow_dx, shadow_dy)
+					local shadow_alpha = math.floor((shcol.a or 255) * shadow_strength * (a / 255) + 0.5)
+					if shadow_alpha > 0 then
+						emit_quad(q, shcol.r, shcol.g, shcol.b, math.min(255, shadow_alpha), shadow_dx, shadow_dy)
+					end
 				end
 
-				-- 2) bold passes (includes the main pass at {0,0})
+				-- 2) outline passes around the glyph
+				if outline_on then
+					local outline_alpha = math.floor((outcol.a or 255) * outline_strength * (a / 255) + 0.5)
+					if outline_alpha > 0 then
+						for _, offset in ipairs(outline_offsets) do
+							emit_quad(q, outcol.r, outcol.g, outcol.b, math.min(255, outline_alpha), offset[1], offset[2])
+						end
+					end
+				end
+
+				-- 3) bold passes (includes the main pass at {0,0})
 				for _, off in ipairs(bold_offsets(bold_passes)) do
 					emit_quad(q, r, g, b, a, off[1], off[2])
 				end
@@ -843,97 +1168,163 @@ local function generateTextVerticesRaw(font, text, x, y, r, g, b, a, style)
 end
 
 function M.generateTextVertices(font, text, x, y, r, g, b, a)
-    -- parse into segments with base font & color
     local segments = parseRichText(text, r or 255, g or 255, b or 255, a or 255, font.id, font.size)
+    local lines = layout_rich_text_lines(segments, font)
     local verts, inds = {}, {}
-    local cursorX, cursorY = x, y
+    local run_meshes, decorations = {}, {}
     local totalVcount, totalIcount = 0, 0
-    
-    local decorations = {}
-	local lastSliceX = x
+    local line_top = y
 
-	local function append(segFont, segText, segColor, segFlags)
-		local segVerts, segInds, vcount, icount, xEnd =
-			generateTextVerticesRaw(
-				segFont, segText, cursorX, cursorY,
-				segColor.r, segColor.g, segColor.b, segColor.a,
-				{
-					italic = segFlags.italic,
-					bold   = segFlags.bold,
-					shadow = segFlags.shadow,     -- requires parser tag or you can force true here
-					strike = segFlags.strike,     -- handled as decoration below
-					italic_shear = STYLE.italic_shear,
-					bold_passes  = STYLE.bold_passes,
-					bold_px      = STYLE.bold_px,
-					shadow_dx    = STYLE.shadow_dx,
-					shadow_dy    = STYLE.shadow_dy,
-					shadow_color = STYLE.shadow_color,
-				}
-			)
+    for _, line in ipairs(lines) do
+        local cursor_x = x
+        local common_baseline = line_top + line.ascent
 
-		for i = 0, vcount - 1 do verts[#verts+1] = segVerts[i] end
-		for i = 0, icount - 1 do inds[#inds+1] = segInds[i] + totalVcount end
+        for _, run in ipairs(line.runs) do
+            local segment = run.segment
+            local segment_font = run.font
+            local run_y = common_baseline - run.metrics.ascent
+            local run_start_x = cursor_x
+            local seg_verts, seg_inds, vert_count, index_count, x_end =
+                generateTextVerticesRaw(
+                    segment_font,
+                    run.text,
+                    cursor_x,
+                    run_y,
+                    segment.color.r,
+                    segment.color.g,
+                    segment.color.b,
+                    segment.color.a,
+                    {
+                        kern = segment.kern,
+                        tab_origin = x,
+                        italic = segment.italic,
+                        bold = segment.bold,
+                        shadow = segment.shadow,
+                        shadow_strength = segment.shadow_strength,
+                        shadow_color = segment.shadow_color,
+                        shadow_dx = segment.shadow_dx,
+                        shadow_dy = segment.shadow_dy,
+                        outline = segment.outline,
+                        outline_size = segment.outline_size,
+                        outline_strength = segment.outline_strength,
+                        outline_color = segment.outline_color,
+                        italic_shear = STYLE.italic_shear,
+                        bold_passes = STYLE.bold_passes,
+                        bold_px = STYLE.bold_px,
+                    }
+                )
 
-		totalVcount = totalVcount + vcount
-		totalIcount = totalIcount + icount
-		cursorX = xEnd
+            if vert_count > 0 and index_count > 0 then
+                run_meshes[#run_meshes + 1] = {
+                    font = segment_font,
+                    vertices = seg_verts,
+                    indices = seg_inds,
+                    vertCount = vert_count,
+                    idxCount = index_count,
+                }
+                for i = 0, vert_count - 1 do
+                    verts[#verts + 1] = seg_verts[i]
+                end
+                for i = 0, index_count - 1 do
+                    inds[#inds + 1] = seg_inds[i] + totalVcount
+                end
 
-		-- record strike decoration for this slice
-		if segFlags.strike then
-			local a = ffi.new("int[1]"); local d = ffi.new("int[1]"); local g = ffi.new("int[1]")
-			stbtt.GetFontVMetrics(segFont.info, a, d, g)
-			local ascent = a[0]*segFont.scale
-			local topY   = cursorY + ascent - ascent         -- same as baseline - ascent
-			-- position the strike line ~34% down from the top of the em box
-			local strikeY = cursorY + ascent * (1.0 - 0.34)
-			local thick   = math.max(1, math.floor(segFont.size * 0.06 + 0.5))
-			decorations[#decorations+1] = {x1 = lastSliceX, x2 = cursorX, y = strikeY, h = thick, color = segColor}
-		end
-	end
+                totalVcount = totalVcount + vert_count
+                totalIcount = totalIcount + index_count
+            end
 
-    local baseLineAdvance
-    do
-        local a = ffi.new("int[1]"); local d = ffi.new("int[1]"); local g = ffi.new("int[1]")
-        stbtt.GetFontVMetrics(font.info, a, d, g)
-        baseLineAdvance = (a[0]*font.scale - d[0]*font.scale + g[0]*font.scale)
+            cursor_x = x_end
+
+            if segment.strike and cursor_x > run_start_x then
+                local strike_y = common_baseline - run.metrics.ascent * 0.34
+                local thickness = math.max(1, math.floor(segment_font.size * 0.06 + 0.5))
+                decorations[#decorations + 1] = {
+                    x1 = run_start_x,
+                    x2 = cursor_x,
+                    y = strike_y,
+                    h = thickness,
+                    color = segment.color,
+                }
+            end
+        end
+
+        line_top = line_top + line.advance
     end
 
-    for _, seg in ipairs(segments) do
-        local segFont = ((seg.fontId ~= font.id or seg.fontSize ~= font.size) and M.load(seg.fontId, seg.fontSize)) or font
+    local vertices = ffi.new("Vertex[?]", totalVcount)
+    local indices = ffi.new("uint16_t[?]", totalIcount)
+    for i = 1, totalVcount do vertices[i - 1] = verts[i] end
+    for i = 1, totalIcount do indices[i - 1] = inds[i] end
 
-        -- split on '\n' so we can jump lines between chunks
-        local start = 1
-        while true do
-            local nl = seg.text:find("\n", start, true)
-            local slice = nl and seg.text:sub(start, nl-1) or seg.text:sub(start)
-			
-			if #slice > 0 then
-				lastSliceX = cursorX
-				append(segFont, slice, seg.color, seg)
-			end
-
-            if not nl then break end
-            -- newline: reset x and advance y by this segment's line height
-            local a = ffi.new("int[1]"); local d = ffi.new("int[1]"); local g = ffi.new("int[1]")
-            stbtt.GetFontVMetrics(segFont.info, a, d, g)
-            local lineAdvance = (a[0]*segFont.scale - d[0]*segFont.scale + g[0]*segFont.scale)
-            cursorX = x
-            cursorY = cursorY + lineAdvance
-            start = nl + 1
+    local batches = {}
+    local first_font
+    local multiple_fonts = false
+    for _, mesh in ipairs(run_meshes) do
+        if not first_font then
+            first_font = mesh.font
+        elseif mesh.font ~= first_font then
+            multiple_fonts = true
+            break
         end
     end
 
-    -- to ffi buffers
-    local vbuffer = ffi.new("Vertex[?]", totalVcount)
-    local ibuffer = ffi.new("uint16_t[?]", totalIcount)
-    for i = 1, totalVcount do vbuffer[i-1] = verts[i] end
-    for i = 1, totalIcount do ibuffer[i-1] = inds[i] end
+    if #run_meshes > 0 and not multiple_fonts then
+        batches[1] = {
+            texture = first_font.texture,
+            vertices = vertices,
+            indices = indices,
+            vertCount = totalVcount,
+            idxCount = totalIcount,
+        }
+    elseif multiple_fonts then
+        for _, mesh in ipairs(run_meshes) do
+            local batch = batches[#batches]
+            if not batch or batch.font ~= mesh.font then
+                batch = {
+                    font = mesh.font,
+                    texture = mesh.font.texture,
+                    vertices = {},
+                    indices = {},
+                    vertCount = 0,
+                    idxCount = 0,
+                }
+                batches[#batches + 1] = batch
+            end
 
-    return vbuffer, ibuffer, totalVcount, totalIcount, decorations
+            for i = 0, mesh.vertCount - 1 do
+                batch.vertices[#batch.vertices + 1] = mesh.vertices[i]
+            end
+            for i = 0, mesh.idxCount - 1 do
+                batch.indices[#batch.indices + 1] = mesh.indices[i] + batch.vertCount
+            end
+            batch.vertCount = batch.vertCount + mesh.vertCount
+            batch.idxCount = batch.idxCount + mesh.idxCount
+        end
+    end
+
+    for _, batch in ipairs(batches) do
+        if batch.font then
+        local batch_vertices = ffi.new("Vertex[?]", batch.vertCount)
+        local batch_indices = ffi.new("uint16_t[?]", batch.idxCount)
+        for i = 1, batch.vertCount do batch_vertices[i - 1] = batch.vertices[i] end
+        for i = 1, batch.idxCount do batch_indices[i - 1] = batch.indices[i] end
+        batch.vertices = batch_vertices
+        batch.indices = batch_indices
+        batch.font = nil
+        end
+    end
+
+    return vertices, indices, totalVcount, totalIcount, decorations, batches
 end
 
-function M.addFont(path)
-    table.insert(fonts, path)
+function M.addFont(path, alias)
+    if type(path) ~= "string" or path == "" then return nil end
+    local font_id = M.id(path)
+    if font_id ~= nil and alias then
+        local normalized_alias = normalize_font_alias(alias)
+        if normalized_alias then font_aliases[normalized_alias] = font_id end
+    end
+    return font_id
 end
 
 function M.shutdown()

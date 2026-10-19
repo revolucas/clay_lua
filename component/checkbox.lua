@@ -1,45 +1,44 @@
-local glfw = require("ffi.ffi_glfw")
+local window = require("window")
+local theme = require("theme")
 
 _cb_state = _cb_state or {}
 
 local function C(c) return c.r, c.g, c.b, c.a end
+local TRANSPARENT = { r=0, g=0, b=0, a=0 }
 
 -- Default colors
-local CB_DEFAULT = {
-  box_base = { r=40,  g=40,  b=40,  a=160 },
-  box_hov  = { r=60,  g=60,  b=60,  a=200 },
-  box_act  = { r=80,  g=80,  b=80,  a=220 },
-  box_dis  = { r=30,  g=30,  b=30,  a=100 },
-  border   = { r=255, g=255, b=255, a=64  },
-  fill     = { r=120, g=190, b=255, a=220 },
-  label    = { r=230, g=230, b=240, a=255 },
-  fillBorder = { r=255, g=255, b=255, a=90 },
-}
-
 -- checkbox(elid, label, defaultChecked, opts)
+-- opts.transitionDuration controls the indicator and hover color easing (0 disables it).
 function checkbox(elid, label, defaultChecked, opts)
   -- input (read once here)
-  glfw.GetCursorPos(device.win, mouse_x, mouse_y)
-  local down = glfw.GetMouseButton(device.win, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS
+  local mx, my = window.mousePosition()
+  local down = window.mouseButtonDown(window.MOUSE_BUTTON_LEFT)
 
   -- config
-  local size     = (opts and opts.size)     or 18
-  local gap      = (opts and opts.gap)      or 8
-  local fontId   = (opts and opts.fontId)   or 1
-  local fontSize = (opts and opts.fontSize) or 16
+  local componentDefaults = theme.defaults.checkbox
+  local size     = (opts and opts.size)     or componentDefaults.size
+  local gap      = (opts and opts.gap)      or theme.spacing.controlGap
+  local fontId   = (opts and opts.fontId)   or componentDefaults.fontId
+  local fontSize = (opts and opts.fontSize) or theme.type.body
   local disabled = (opts and opts.disabled) or false
+  local transitionDuration = opts and opts.transitionDuration
+  if transitionDuration == nil then transitionDuration = theme.motion.standard end
+  assert(type(transitionDuration) == "number" and transitionDuration >= 0,
+    "checkbox: transitionDuration must be a non-negative number")
 
   local colors = opts and opts.colors
   local box = colors and colors.box
 
-  local c_box_base = (box and box.base) or CB_DEFAULT.box_base
-  local c_box_hov  = (box and box.hov ) or CB_DEFAULT.box_hov
-  local c_box_act  = (box and box.act ) or CB_DEFAULT.box_act
-  local c_box_dis  = (box and box.dis ) or CB_DEFAULT.box_dis
+  local colorDefaults = theme.colors.checkbox
+  local c_box_base = (box and box.base) or colorDefaults.box_base
+  local c_box_hov  = (box and box.hov ) or colorDefaults.box_hov
+  local c_box_act  = (box and box.act ) or colorDefaults.box_act
+  local c_box_dis  = (box and box.dis ) or colorDefaults.box_dis
 
-  local c_border   = (colors and colors.border) or CB_DEFAULT.border
-  local c_fill     = (colors and colors.fill)   or CB_DEFAULT.fill
-  local c_label    = (colors and colors.label)  or CB_DEFAULT.label
+  local c_border   = (colors and colors.border) or colorDefaults.border
+  local c_fill     = (colors and colors.fill)   or colorDefaults.fill
+  local c_fillBorder = (colors and colors.fillBorder) or colorDefaults.fillBorder
+  local c_label    = (colors and colors.label)  or colorDefaults.label
 
   -- per-id state
   local key = elid.id
@@ -67,6 +66,11 @@ function checkbox(elid, label, defaultChecked, opts)
 
   -- visuals
   local boxCol = disabled and c_box_dis or (st.pressed and c_box_act or (hovered and c_box_hov or c_box_base))
+  local indicatorColor = st.value and c_fill or TRANSPARENT
+  local indicatorBorder = st.value and c_fillBorder or TRANSPARENT
+  local fillSize = math.max(1, size - math.max(3, math.floor(size * 0.2)) * 2)
+  local boxId = clay.id("cb-box", key, true)
+  local fillId = clay.id("cb-fill", key, true)
 
   -- root row
   clay.element(elid)
@@ -78,27 +82,30 @@ function checkbox(elid, label, defaultChecked, opts)
     :children(function()
 
       -- box
-      clay.element(clay.id("cb-box", key))
+      local boxBuilder = clay.element(boxId)
         :width(clay.SIZING_FIXED, size)
         :height(clay.SIZING_FIXED, size)
         :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
         :backgroundColor(C(boxCol))
         :borderColor(C(c_border))
         :borderWidth(1)
-        :children(function()
-          if st.value then
-            local pad = math.max(3, math.floor(size * 0.2))
-            local fillSize = math.max(1, size - pad * 2)
-
-            clay.element(clay.id("cb-fill", key))
-              :width(clay.SIZING_FIXED, fillSize)
-              :height(clay.SIZING_FIXED, fillSize)
-              :backgroundColor(C(c_fill))
-              :borderColor(C(CB_DEFAULT.fillBorder))
-              :borderWidth(1)
-              :close()
-          end
-        end)
+      if transitionDuration > 0 then
+        boxBuilder:transition(transitionDuration, "backgroundColor")
+      end
+      boxBuilder:children(function()
+        -- Keep the indicator in the tree while unchecked so its color can
+        -- transition smoothly in both directions.
+        local fillBuilder = clay.element(fillId)
+          :width(clay.SIZING_FIXED, fillSize)
+          :height(clay.SIZING_FIXED, fillSize)
+          :backgroundColor(C(indicatorColor))
+          :borderColor(C(indicatorBorder))
+          :borderWidth(1)
+        if transitionDuration > 0 then
+          fillBuilder:transition(transitionDuration, "backgroundColor", "borderColor")
+        end
+        fillBuilder:close()
+      end)
 
       if label ~= nil then
         clay.text(label)

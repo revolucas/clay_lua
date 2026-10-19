@@ -1,338 +1,219 @@
 local ffi = require("ffi")
-local glfw = require("ffi.ffi_glfw")
+local bit = require("bit")
+local rgfw = require("ffi.ffi_rgfw")
 local _window = nil
-
-local scroll_delta_x, scroll_delta_y = 0, 0 -- frame offset deltas
+local _title = "Clay Lua"
+local scroll_delta_x, scroll_delta_y = 0, 0
+local event = ffi.new("ClayRGFWEvent[1]")
+local value_x, value_y = ffi.new("int[1]"), ffi.new("int[1]")
+local size_w, size_h = ffi.new("int[1]"), ffi.new("int[1]")
+local pos_x, pos_y = ffi.new("int[1]"), ffi.new("int[1]")
 
 local M = {}
 
+-- Input constants use the familiar cross-platform key values expected by the
+-- UI components; the native wrapper translates them to RGFW's key enum.
+M.PRESS, M.RELEASE, M.REPEAT = 1, 0, 2
+M.MOUSE_BUTTON_LEFT, M.MOUSE_BUTTON_RIGHT, M.MOUSE_BUTTON_MIDDLE = 0, 1, 2
+M.KEY_UNKNOWN = -1
+M.KEY_SPACE = 32
+M.KEY_APOSTROPHE, M.KEY_COMMA, M.KEY_MINUS, M.KEY_PERIOD, M.KEY_SLASH = 39, 44, 45, 46, 47
+M.KEY_0, M.KEY_1, M.KEY_2, M.KEY_3, M.KEY_4 = 48, 49, 50, 51, 52
+M.KEY_5, M.KEY_6, M.KEY_7, M.KEY_8, M.KEY_9 = 53, 54, 55, 56, 57
+M.KEY_SEMICOLON, M.KEY_EQUAL = 59, 61
+for code = 65, 90 do M["KEY_" .. string.char(code)] = code end
+M.KEY_LEFT_BRACKET, M.KEY_BACKSLASH, M.KEY_RIGHT_BRACKET, M.KEY_GRAVE_ACCENT = 91, 92, 93, 96
+M.KEY_ESCAPE, M.KEY_ENTER, M.KEY_TAB, M.KEY_BACKSPACE = 256, 257, 258, 259
+M.KEY_INSERT, M.KEY_DELETE = 260, 261
+M.KEY_RIGHT, M.KEY_LEFT, M.KEY_DOWN, M.KEY_UP = 262, 263, 264, 265
+M.KEY_PAGE_UP, M.KEY_PAGE_DOWN, M.KEY_HOME, M.KEY_END = 266, 267, 268, 269
+M.KEY_CAPS_LOCK, M.KEY_SCROLL_LOCK, M.KEY_NUM_LOCK = 280, 281, 282
+M.KEY_PRINT_SCREEN, M.KEY_PAUSE = 283, 284
+for n = 1, 25 do M["KEY_F" .. n] = 289 + n end
+M.KEY_KP_0 = 320
+for n = 1, 9 do M["KEY_KP_" .. n] = 320 + n end
+M.KEY_KP_DECIMAL, M.KEY_KP_DIVIDE, M.KEY_KP_MULTIPLY = 330, 331, 332
+M.KEY_KP_SUBTRACT, M.KEY_KP_ADD, M.KEY_KP_ENTER, M.KEY_KP_EQUAL = 333, 334, 335, 336
+M.KEY_LEFT_SHIFT, M.KEY_LEFT_CONTROL, M.KEY_LEFT_ALT, M.KEY_LEFT_SUPER = 340, 341, 342, 343
+M.KEY_RIGHT_SHIFT, M.KEY_RIGHT_CONTROL, M.KEY_RIGHT_ALT, M.KEY_RIGHT_SUPER = 344, 345, 346, 347
+M.KEY_MENU = 348
+M.MOD_SHIFT, M.MOD_CONTROL, M.MOD_ALT, M.MOD_SUPER = 0x0001, 0x0002, 0x0004, 0x0008
+M.MOD_CAPS_LOCK, M.MOD_NUM_LOCK = 0x0010, 0x0020
+
+local function dispatch_event(e)
+    local kind = tonumber(e.type)
+    if kind == 1 then
+        M.callback_send("window_position", tonumber(e.a), tonumber(e.b))
+    elseif kind == 2 then
+        local w, h = tonumber(e.a), tonumber(e.b)
+        M.callback_send("window_size", w, h)
+        M.callback_send("window_framebuffer_size", w, h)
+    elseif kind == 3 then
+        M.callback_send("window_close")
+    elseif kind == 4 then
+        M.callback_send("window_refresh")
+    elseif kind == 5 then
+        M.callback_send("window_focus", tonumber(e.a) ~= 0)
+    elseif kind == 6 then
+        M.callback_send("window_iconify", tonumber(e.a) ~= 0)
+    elseif kind == 7 then
+        M.callback_send("window_maximized", tonumber(e.a) ~= 0)
+    elseif kind == 8 then
+        M.callback_send("window_iconify", false)
+        M.callback_send("window_maximized", false)
+    elseif kind == 9 then
+        M.callback_send("window_content_scale", tonumber(e.x), tonumber(e.y))
+    elseif kind == 10 then
+        local key, scancode = tonumber(e.a), tonumber(e.b)
+        local action, mods = tonumber(e.c), tonumber(e.d)
+        M.callback_send("window_set_key", key, scancode, action, mods)
+        local codepoint = tonumber(e.codepoint)
+        if action ~= M.RELEASE and codepoint >= 32 and codepoint ~= 127
+            and bit.band(mods, bit.bor(M.MOD_CONTROL, M.MOD_ALT, M.MOD_SUPER)) == 0 then
+            M.callback_send("window_set_char", codepoint)
+            M.callback_send("window_set_char_mods", codepoint, mods)
+        end
+    elseif kind == 11 then
+        M.callback_send("mouse_button", tonumber(e.a), tonumber(e.b), tonumber(e.c))
+    elseif kind == 12 then
+        M.callback_send("mouse_position", tonumber(e.x), tonumber(e.y))
+    elseif kind == 13 then
+        M.callback_send("mouse_enter", tonumber(e.a) ~= 0)
+    elseif kind == 14 then
+        local dx, dy = tonumber(e.x), tonumber(e.y)
+        scroll_delta_x = scroll_delta_x + dx
+        scroll_delta_y = scroll_delta_y + dy
+        M.callback_send("mouse_scroll", scroll_delta_x, scroll_delta_y, dx, dy)
+    elseif kind == 15 then
+        local paths = {}
+        for i = 0, tonumber(e.count) - 1 do
+            paths[#paths + 1] = ffi.string(e.paths[i])
+        end
+        M.callback_send("file_drop", paths, #paths)
+    end
+end
+
 function M.create(config)
-    -- keep references to ffi callbacks so they aren't garbage collected
-	local CB_KEEP = {}
-	-- Safety calling
-	local function make_callback(ctype, func, ret_default)
-		local function wrapper(...)
-			local ok, res = xpcall(func, debug.traceback, ...)
-			if not ok then
-				io.stderr:write("\n[ffi-callback error]\n", res, "\n\n")
-				return ret_default  -- nil for void, 0 for int-returners
-			end
-			return res
-		end
-		local cb = ffi.cast(ctype, wrapper)
-		CB_KEEP[#CB_KEEP+1] = cb
-		return cb
-	end
+    config = config or {}
+    local x = tonumber(config.x or config[1]) or 0
+    local y = tonumber(config.y or config[2]) or 0
+    local width = tonumber(config.width or config[3]) or 800
+    local height = tonumber(config.height or config[4]) or 600
+    local fullscreen = config.fullscreen == true or config[5] == true
+    local centered = config.center ~= false
+    _title = config.title or "Clay Lua"
 
-    glfw.SetErrorCallback(
-        make_callback(
-            "GLFWerrorfun",
-            function(err, desc)
-                print(ffi.string(desc))
-            end
-        )
-    )
-
-    if (glfw.Init() == 0) then
-        error("glfw.Init() failed")
+    _window = rgfw.clay_rgfw_create(_title, x, y, width, height, fullscreen and 1 or 0, centered and 1 or 0)
+    if _window == nil or _window == ffi.NULL then
+        error("RGFW window creation failed")
     end
 
-    -- Configuration
-    local x = config and tonumber(config.x) or 0
-    local y = config and tonumber(config.y) or 0
-    local width = config and tonumber(config.width) or 800
-    local height = config and tonumber(config.height) or 600
-    local fullscreen = config and config.fullscreen == true or false
-
-    local monitor = glfw.GetPrimaryMonitor()
-    local mode = glfw.GetVideoMode(monitor)
-
-    glfw.WindowHint(glfw.CLIENT_API, glfw.NO_API)
-    glfw.WindowHint(glfw.DOUBLEBUFFER, 1)
-    glfw.WindowHint(glfw.RED_BITS, mode.redBits)
-    glfw.WindowHint(glfw.GREEN_BITS, mode.greenBits)
-    glfw.WindowHint(glfw.BLUE_BITS, mode.blueBits)
-    glfw.WindowHint(glfw.ALPHA_BITS, glfw.DONT_CARE)
-    glfw.WindowHint(glfw.DEPTH_BITS, glfw.DONT_CARE)
-    glfw.WindowHint(glfw.STENCIL_BITS, 8)
-    glfw.WindowHint(glfw.REFRESH_RATE, mode.refreshRate)
-
-    if (ffi.os == "OSX") then
-        glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 3)
-        glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 2)
-        glfw.WindowHint(glfw.OPENGL_FORWARD_COMPAT, 1)
-        glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-    end
-
-    local wnd = nil
-    if fullscreen then
-        wnd = glfw.CreateWindow(width, height, "", monitor, nil)
-    else
-        wnd = glfw.CreateWindow(width, height, "", nil, nil)
-        glfw.SetWindowPos(wnd, (mode.width - width) / 2, (mode.height - height) / 2)
-    end
-
-    if wnd == nil then
-        glfw.Terminate()
-        error("Glfw window creation failed")
-    end
-
-    _window = wnd
-
-    M.callback_send("window_creation", wnd, width, height) -- If using OpenGL instead of BGFX remember to call glfw.MakeContextCurrent(wnd) here
-
-    glfw.SetWindowPosCallback(
-        wnd,
-        make_callback(
-            "GLFWwindowposfun",
-            function(_, x, y)
-                M.callback_send("window_position", x, y)
-            end
-        )
-    )
-
-    glfw.SetWindowSizeCallback(
-        wnd,
-        make_callback(
-            "GLFWwindowsizefun",
-            function(_, w, h)
-                M.callback_send("window_size", w, h)
-            end
-        )
-    )
-
-    glfw.SetWindowCloseCallback(
-        wnd,
-        make_callback(
-            "GLFWwindowclosefun",
-            function(_)
-                M.callback_send("window_close")
-            end
-        )
-    )
-
-    glfw.SetWindowRefreshCallback(
-        wnd,
-        make_callback(
-            "GLFWwindowrefreshfun",
-            function(_)
-                M.callback_send("window_refresh")
-            end
-        )
-    )
-
-    glfw.SetWindowFocusCallback(
-        wnd,
-        make_callback(
-            "GLFWwindowfocusfun",
-            function(_, focused)
-                M.callback_send("window_focus", focused)
-            end
-        )
-    )
-
-    glfw.SetWindowIconifyCallback(
-        wnd,
-        make_callback(
-            "GLFWwindowiconifyfun",
-            function(_, iconified)
-                M.callback_send("window_iconify", iconified)
-            end
-        )
-    )
-
-    glfw.SetWindowMaximizeCallback(
-        wnd,
-        make_callback(
-            "GLFWwindowmaximizefun",
-            function(_, maximized)
-                M.callback_send("window_maximized", maximized)
-            end
-        )
-    )
-
-    glfw.SetFramebufferSizeCallback(
-        wnd,
-        make_callback(
-            "GLFWframebuffersizefun",
-            function(_, w, h)
-                M.callback_send("window_framebuffer_size", w, h)
-            end
-        )
-    )
-
-    glfw.SetWindowContentScaleCallback(
-        wnd,
-        make_callback(
-            "GLFWwindowcontentscalefun",
-            function(_, sx, sy)
-                M.callback_send("window_content_scale", sx, sy)
-            end
-        )
-    )
-
-    glfw.SetKeyCallback(
-        wnd,
-        make_callback(
-            "GLFWkeyfun",
-            function(_, key, sc, action, mods)
-                M.callback_send("window_set_key", key, sc, action, mods) -- https://www.glfw.org/docs/latest/group__keys.html
-            end
-        )
-    )
-
-    glfw.SetCharCallback(
-        wnd,
-        make_callback(
-            "GLFWcharfun",
-            function(_, codepoint)
-                M.callback_send("window_set_char", codepoint)
-            end
-        )
-    )
-
-    glfw.SetCharModsCallback(
-        wnd,
-        make_callback(
-            "GLFWcharmodsfun",
-            function(_, codepoint, mods)
-                M.callback_send("window_set_char_mods", codepoint, mods)
-            end
-        )
-    )
-
-    glfw.SetMouseButtonCallback(
-        wnd,
-        make_callback(
-            "GLFWmousebuttonfun",
-            function(_, button, action, mods)
-                M.callback_send("mouse_button", button, action, mods)
-            end
-        )
-    )
-
-    glfw.SetCursorPosCallback(
-        wnd,
-        make_callback(
-            "GLFWcursorposfun",
-            function(_, x, y)
-                M.callback_send("mouse_position", x, y)
-            end
-        )
-    )
-
-    glfw.SetCursorEnterCallback(
-        wnd,
-        make_callback(
-            "GLFWcursorenterfun",
-            function(_, entered)
-                M.callback_send("mouse_enter", entered)
-            end
-        )
-    )
-
-    glfw.SetScrollCallback(
-        wnd,
-        make_callback(
-            "GLFWscrollfun",
-            function(_, xoff, yoff)
-                scroll_delta_x = scroll_delta_x + xoff
-                scroll_delta_y = scroll_delta_y + yoff
-                M.callback_send("mouse_scroll", scroll_delta_x, scroll_delta_y, xoff, yoff)
-            end
-        )
-    )
-
-    glfw.SetDropCallback(
-        wnd,
-        make_callback(
-            "GLFWdropfun",
-            function(_, count, paths)
-                local t = {}
-                for i = 0, count - 1 do
-                    table.insert(t, ffi.string(paths[i]))
-                end
-                M.callback_send("file_drop", t, count)
-            end
-        )
-    )
-
-    return wnd
+    M.callback_send("window_creation", _window, width, height)
+    return _window
 end
 
 function M.update(dt)
-    glfw.PollEvents()
-    M.callback_send("window_update", _window, dt)
-
-    scroll_delta_x = 0
-    scroll_delta_y = 0
-end
-
--- Get or Set window title
-function M.title(str)
-    if (str) then
-        glfw.SetWindowTitle(_window, str)
-        return str
+    while rgfw.clay_rgfw_next_event(_window, event) ~= 0 do
+        dispatch_event(event[0])
     end
-    return glfw.GetWindowTitle(_window)
+    M.callback_send("window_update", _window, dt)
+    scroll_delta_x, scroll_delta_y = 0, 0
 end
 
--- Get or Set window width and height
+function M.title(str)
+    if str ~= nil then
+        _title = tostring(str)
+        rgfw.clay_rgfw_set_title(_window, _title)
+    end
+    return _title
+end
+
 function M.size(w, h)
-    local _w, _h = ffi.new("int[1]"), ffi.new("int[1]")
-    glfw.GetWindowSize(_window, _w, _h)
-    if (w or h) then
-        w = w or _w[0]
-        h = h or _h[0]
-        glfw.SetWindowSize(_window, w, h)
+    rgfw.clay_rgfw_get_size(_window, size_w, size_h)
+    local current_w, current_h = tonumber(size_w[0]), tonumber(size_h[0])
+    if w ~= nil or h ~= nil then
+        w = tonumber(w) or current_w
+        h = tonumber(h) or current_h
+        rgfw.clay_rgfw_set_size(_window, w, h)
         return w, h
     end
-    return _w[0], _h[0]
+    return current_w, current_h
 end
 
--- Get or Set window position
 function M.position(x, y)
-    local _x, _y = glfw.GetWindowPos(_window)
-    if (x or y) then
-        x = x or _x
-        y = y or _y
-        glfw.SetWindowPos(_window, x, y)
+    rgfw.clay_rgfw_get_position(_window, pos_x, pos_y)
+    local current_x, current_y = tonumber(pos_x[0]), tonumber(pos_y[0])
+    if x ~= nil or y ~= nil then
+        x = tonumber(x) or current_x
+        y = tonumber(y) or current_y
+        rgfw.clay_rgfw_set_position(_window, x, y)
         return x, y
     end
-    return _x, _y
+    return current_x, current_y
 end
 
--- Get framebuffer width and height
 function M.framebufferSize()
-    local width = ffi.new("int[1]")
-    local height = ffi.new("int[1]")
-    glfw.GetFramebufferSize(_window, width, height)
-    return width[0], height[0]
+    rgfw.clay_rgfw_get_size(_window, size_w, size_h)
+    return tonumber(size_w[0]), tonumber(size_h[0])
+end
+
+function M.mousePosition()
+    rgfw.clay_rgfw_mouse_position(_window, value_x, value_y)
+    return tonumber(value_x[0]), tonumber(value_y[0])
+end
+
+function M.keyDown(key)
+    return rgfw.clay_rgfw_key_down(_window, tonumber(key)) ~= 0
+end
+
+function M.mouseButtonDown(button)
+    return rgfw.clay_rgfw_mouse_down(_window, tonumber(button)) ~= 0
+end
+
+function M.clipboardText()
+    local text = rgfw.clay_rgfw_clipboard_get()
+    return (text ~= nil and text ~= ffi.NULL) and ffi.string(text) or ""
+end
+
+function M.setClipboardText(text)
+    text = tostring(text or "")
+    rgfw.clay_rgfw_clipboard_set(text, #text)
+end
+
+function M.nativeHandles()
+    local nwh, ndt, handle_type = ffi.new("void *[1]"), ffi.new("void *[1]"), ffi.new("int[1]")
+    if rgfw.clay_rgfw_platform_data(_window, nwh, ndt, handle_type) == 0 then
+        error("RGFW did not provide native window handles for BGFX")
+    end
+    return nwh[0], ndt[0], tonumber(handle_type[0])
 end
 
 function M.show()
-    glfw.ShowWindow(_window)
+    rgfw.clay_rgfw_show(_window)
     M.callback_send("window_show", _window)
 end
 
 function M.hide()
     M.callback_send("window_hide", _window)
-    glfw.HideWindow(_window)
+    rgfw.clay_rgfw_hide(_window)
 end
 
 function M.time()
-    return glfw.GetTime()
+    return rgfw.clay_rgfw_time()
 end
 
 function M.shouldClose()
-    return glfw.WindowShouldClose(_window) == glfw.TRUE
+    return rgfw.clay_rgfw_should_close(_window) ~= 0
+end
+
+function M.setShouldClose(should_close)
+    rgfw.clay_rgfw_set_should_close(_window, should_close and 1 or 0)
 end
 
 function M.destroy()
-    if (_window ~= nil) then
+    if _window ~= nil and _window ~= ffi.NULL then
         M.callback_send("window_destroy", _window)
-        glfw.DestroyWindow(_window)
-        glfw.Terminate()
+        rgfw.clay_rgfw_close(_window)
         _window = nil
     end
 end

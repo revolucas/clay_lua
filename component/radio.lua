@@ -1,29 +1,17 @@
 -- component/radio.lua (new builder API, no per-call default table churn)
-local glfw = require("ffi.ffi_glfw")
+local window = require("window")
+local theme = require("theme")
 
 _radio_group = _radio_group or {} -- per-group selected value
 _radio_btn   = _radio_btn   or {} -- per-button press state
 
 local function C(c) return c.r, c.g, c.b, c.a end
+local TRANSPARENT = { r=0, g=0, b=0, a=0 }
 
 -- defaults (allocated once)
 local RADIO_DEFAULT = {
-  size      = 20,
-  gap       = 8,
-  fontId    = 1,
-  fontSize  = 16,
   disabled  = false,
   allowNone = false,
-  colors = {
-    ringBase  = { r=40,  g=40,  b=40,  a=160 },
-    ringHov   = { r=60,  g=60,  b=60,  a=200 },
-    ringAct   = { r=80,  g=80,  b=80,  a=220 },
-    ringDis   = { r=30,  g=30,  b=30,  a=100 },
-    border    = { r=255, g=255, b=255, a=64  },
-    dot       = { r=120, g=190, b=255, a=220 },
-    label     = { r=230, g=230, b=240, a=255 },
-    dotBorder = { r=255, g=255, b=255, a=90  },
-  }
 }
 
 -- radio(elid, label, groupKey, myValue, defaultSelected, opts)
@@ -31,21 +19,27 @@ local RADIO_DEFAULT = {
 --   opts.size, opts.gap, opts.fontId, opts.fontSize, opts.disabled
 --   opts.colors: { ringBase, ringHov, ringAct, ringDis, border, dot, label, dotBorder }
 --   opts.allowNone: true to allow deselecting all by clicking selected
+--   opts.transitionDuration: indicator and color transition time in seconds (0 disables)
 function radio(elid, label, groupKey, myValue, defaultSelected, opts)
   -- input (read once)
-  local down = (glfw.GetMouseButton(device.win, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS)
+  local down = (window.mouseButtonDown(window.MOUSE_BUTTON_LEFT))
 
   -- config
   local def      = RADIO_DEFAULT
-  local size     = (opts and opts.size)     or def.size
-  local gap      = (opts and opts.gap)      or def.gap
-  local fontId   = (opts and opts.fontId)   or def.fontId
-  local fontSize = (opts and opts.fontSize) or def.fontSize
+  local defaults = theme.defaults.radio
+  local size     = (opts and opts.size)     or defaults.size
+  local gap      = (opts and opts.gap)      or theme.spacing.controlGap
+  local fontId   = (opts and opts.fontId)   or defaults.fontId
+  local fontSize = (opts and opts.fontSize) or theme.type.body
   local disabled = (opts and opts.disabled) or def.disabled
   local allowNone= (opts and opts.allowNone)or def.allowNone
+  local transitionDuration = opts and opts.transitionDuration
+  if transitionDuration == nil then transitionDuration = theme.motion.standard end
+  assert(type(transitionDuration) == "number" and transitionDuration >= 0,
+    "radio: transitionDuration must be a non-negative number")
 
   -- colors (no allocations)
-  local dc   = def.colors
+  local dc   = theme.colors.radio
   local col  = opts and opts.colors
   local ringBase  = (col and col.ringBase)  or dc.ringBase
   local ringHov   = (col and col.ringHov)   or dc.ringHov
@@ -97,6 +91,9 @@ function radio(elid, label, groupKey, myValue, defaultSelected, opts)
 
   -- visuals
   local ringCol = disabled and ringDis or (st.pressed and ringAct or (hovered and ringHov or ringBase))
+  local dotSize = math.max(6, math.floor(size * 0.55))
+  local dotColor = selected and dotCol or TRANSPARENT
+  local dotBorderColor = selected and dotBorder or TRANSPARENT
 
   -- ids
   local ringId = clay.id("radio-ring", key, true)
@@ -110,7 +107,7 @@ function radio(elid, label, groupKey, myValue, defaultSelected, opts)
     :height(clay.SIZING_FIXED, size)
     :childGap(gap)
     :children(function()
-      clay.element(ringId)
+      local ringBuilder = clay.element(ringId)
         :width(clay.SIZING_FIXED, size)
         :height(clay.SIZING_FIXED, size)
         :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
@@ -118,19 +115,24 @@ function radio(elid, label, groupKey, myValue, defaultSelected, opts)
         :borderColor(C(border))
         :borderWidth(1)
         :cornerRadius(-1, -1, -1, -1) -- circle
-        :children(function()
-          if selected then
-            local dot = math.max(6, math.floor(size * 0.55))
-            clay.element(dotId)
-              :width(clay.SIZING_FIXED, dot)
-              :height(clay.SIZING_FIXED, dot)
-              :backgroundColor(C(dotCol))
-              :borderColor(C(dotBorder))
-              :borderWidth(1)
-              :cornerRadius(-1, -1, -1, -1)
-              :close()
-          end
-        end)
+      if transitionDuration > 0 then
+        ringBuilder:transition(transitionDuration, "backgroundColor")
+      end
+      ringBuilder:children(function()
+        -- Keep the dot in the tree while unselected so selection can fade in
+        -- and out without relying on element enter/exit transitions.
+        local dotBuilder = clay.element(dotId)
+          :width(clay.SIZING_FIXED, dotSize)
+          :height(clay.SIZING_FIXED, dotSize)
+          :backgroundColor(C(dotColor))
+          :borderColor(C(dotBorderColor))
+          :borderWidth(1)
+          :cornerRadius(-1, -1, -1, -1)
+        if transitionDuration > 0 then
+          dotBuilder:transition(transitionDuration, "backgroundColor", "borderColor")
+        end
+        dotBuilder:close()
+      end)
 
       if label ~= nil then
         clay.text(label)

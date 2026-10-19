@@ -1,5 +1,6 @@
 -- component/resizer.lua (new builder API + no per-call default table churn)
-local glfw = require("ffi.ffi_glfw")
+local window = require("window")
+local theme = require("theme")
 
 local _resz_state = _resz_state or {} -- keyed by parent id
 
@@ -9,21 +10,13 @@ local function C(c) return c.r, c.g, c.b, c.a end
 local RESIZE_DEFAULT = {
   minW = 64,  minH = 32,
   maxW = nil, maxH = nil,
-  grip = 16,
-  inset = 2,
   zIndex = 10000,
   snapW = 0, snapH = 0,
 
   showGrip = false, -- draw glyph (and optional bg)
-  gripColor = { r=255, g=255, b=255, a=48 },
-
   gripGlyph = "◢", -- U+25E2
-  glyphScale = 0.9,
-  glyphColor = { r=255, g=255, b=255, a=90 },
-  glyphFontId = 0,
 }
 
-local COLOR_NONE = { r=0, g=0, b=0, a=0 }
 
 local function clamp_opt(x, a, b)
   if a and x < a then x = a end
@@ -53,38 +46,41 @@ function resizable(parent_id, width, height, opts)
   local maxW = (opts and opts.maxW) or def.maxW
   local maxH = (opts and opts.maxH) or def.maxH
 
-  local grip  = (opts and opts.grip)  or def.grip
-  local inset = (opts and opts.inset) or def.inset
+  local componentDefaults = theme.defaults.resizable
+  local grip  = (opts and opts.grip)  or componentDefaults.grip
+  local inset = (opts and opts.inset) or componentDefaults.inset
   local z     = (opts and opts.zIndex)or def.zIndex
 
   local snapW = (opts and opts.snapW) or def.snapW
   local snapH = (opts and opts.snapH) or def.snapH
 
   local showGrip = ((opts and opts.showGrip) or def.showGrip) == true
-  local gripColor  = (opts and opts.gripColor)  or def.gripColor
+  local colors = theme.colors.resizable
+  local gripColor  = (opts and opts.gripColor)  or colors.gripColor
   local glyph      = (opts and opts.gripGlyph)  or def.gripGlyph
-  local glyphScale = (opts and opts.glyphScale) or def.glyphScale
-  local glyphColor = (opts and opts.glyphColor) or def.glyphColor
-  local glyphFontId= (opts and opts.glyphFontId)or def.glyphFontId
+  local glyphScale = (opts and opts.glyphScale) or componentDefaults.glyphScale
+  local glyphColor = (opts and opts.glyphColor) or colors.glyphColor
+  local glyphFontId= (opts and opts.glyphFontId)or componentDefaults.glyphFontId
 
   -- stable id
   local gripId = clay.id("resizer-grip", parent_id.id, true)
 
   -- hit target (attached to parent's bottom-right)
   clay.element(gripId)
-    :parentId(parent_id.id)
-    :attachTo(clay.ATTACH_TO_ELEMENT_WITH_ID)
-    :attachPoints(clay.ATTACH_POINT_RIGHT_BOTTOM, clay.ATTACH_POINT_RIGHT_BOTTOM)
-    :offset(-inset, -inset) -- keep inside the parent
-    -- optional: enlarge hit area if you want (uncomment and tune)
-    -- :expand(0, 0)
-    :zIndex(z)
-    :clipTo(clay.CLIP_TO_ATTACHED_PARENT)
-    :pointerCaptureMode(clay.POINTER_CAPTURE_MODE_CAPTURE)
+    :floating()
+      :to(parent_id)
+      :attach(clay.ATTACH_POINT_RIGHT_BOTTOM, clay.ATTACH_POINT_RIGHT_BOTTOM)
+      :offset(-inset, -inset) -- keep inside the parent
+      -- optional: enlarge hit area if you want (uncomment and tune)
+      -- :expand(0, 0)
+      :zIndex(z)
+      :clipTo(clay.CLIP_TO_ATTACHED_PARENT)
+      :pointerCaptureMode(clay.POINTER_CAPTURE_MODE_CAPTURE)
+      :done()
     :width(clay.SIZING_FIXED, grip)
     :height(clay.SIZING_FIXED, grip)
     :childAlignment(clay.ALIGN_X_RIGHT, clay.ALIGN_Y_CENTER)
-    :backgroundColor(C(showGrip and gripColor or COLOR_NONE))
+    :backgroundColor(C(showGrip and gripColor or theme.colors.transparent))
     :children(function()
       if showGrip then
         local fs = math.max(8, math.floor(grip * glyphScale))
@@ -97,9 +93,8 @@ function resizable(parent_id, width, height, opts)
     end)
 
   -- mouse input
-  glfw.GetCursorPos(device.win, mouse_x, mouse_y)
-  local mx, my = mouse_x[0], mouse_y[0]
-  local down = (glfw.GetMouseButton(device.win, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS)
+  local mx, my = window.mousePosition()
+  local down = (window.mouseButtonDown(window.MOUSE_BUTTON_LEFT))
 
   -- state
   local pid = parent_id.id

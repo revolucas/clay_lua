@@ -1,5 +1,6 @@
 -- component/scrollbar.lua (new builder API + no per-call default table churn)
-local glfw = require("ffi.ffi_glfw")
+local window = require("window")
+local theme = require("theme")
 
 _state = _state or {}
 
@@ -8,21 +9,11 @@ local function C(c) return c.r, c.g, c.b, c.a end
 -- defaults (allocated once)
 local SB_DEFAULT = {
   horizontal = false,
-  trackW     = 10,
-  minThumb   = 24,
   wheelStep  = 40,
   zIndex     = 1000,
   wheelX     = false,
 
-  -- colors (tables allocated once)
-  colorTrackBase = { r=80,  g=80,  b=80,  a=64  },
-  colorTrackHot  = { r=80,  g=80,  b=80,  a=80  },
-  thumbBase      = { r=180, g=180, b=180, a=140 },
-  thumbDrag      = { r=200, g=200, b=200, a=200 },
-  thumbBorder    = { r=255, g=255, b=255, a=64  },
-
   -- layout tweak
-  margin = 4, -- matches your old "- 4"
 }
 
 -- scratch ids to reduce string churn
@@ -42,15 +33,16 @@ end
 --   colorTrack, colorThumb
 function scrollbar(viewport_id, content_id, wheel, opts)
   -- mouse
-  glfw.GetCursorPos(device.win, mouse_x, mouse_y)
-  local mx, my = mouse_x[0], mouse_y[0]
-  local down = (glfw.GetMouseButton(device.win, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS)
+  local mx, my = window.mousePosition()
+  local down = (window.mouseButtonDown(window.MOUSE_BUTTON_LEFT))
 
   -- opts (no new default tables)
   local def = SB_DEFAULT
+  local componentDefaults = theme.defaults.scrollbar
+  local colors = theme.colors.scrollbar
   local H = ((opts and opts.horizontal) or def.horizontal) == true
-  local trackW = (opts and opts.trackW) or def.trackW
-  local minThumbOpt = (opts and opts.minThumb) or def.minThumb
+  local trackW = (opts and opts.trackW) or componentDefaults.trackWidth
+  local minThumbOpt = (opts and opts.minThumb) or componentDefaults.minThumb
   local wheelStep = (opts and opts.wheelStep) or def.wheelStep
   local zIndex = (opts and opts.zIndex) or def.zIndex
   local wheelUse = H and (((opts and opts.wheelX) or def.wheelX) and wheel or wheel) or wheel
@@ -111,7 +103,7 @@ function scrollbar(viewport_id, content_id, wheel, opts)
   local thumbPos = abs_to_thumbPos(abs)
 
   -- track rect in window space
-  local margin = def.margin
+  local margin = componentDefaults.margin
   local trackX, trackY, trackWpx, trackHpx
   if H then
     trackX, trackY = viewX, (viewY + viewH - trackW - margin)
@@ -226,19 +218,20 @@ function scrollbar(viewport_id, content_id, wheel, opts)
 
   -- colors (avoid allocating hover variants)
   local trackCol =
-    colorTrack or ((overTrack or st.dragging) and def.colorTrackHot or def.colorTrackBase)
+    colorTrack or ((overTrack or st.dragging) and colors.colorTrackHot or colors.colorTrackBase)
   local thumbCol =
-    colorThumb or (st.dragging and def.thumbDrag or def.thumbBase)
+    colorThumb or (st.dragging and colors.thumbDrag or colors.thumbBase)
 
   -- draw attached-to-root track using builder attach chain
   clay.element(scroll_id)
-    :parentId(0) -- root
-    :attachTo(clay.ATTACH_TO_ROOT)
-    :attachPoints(clay.ATTACH_POINT_LEFT_TOP, clay.ATTACH_POINT_LEFT_TOP)
-    :offset(trackX, trackY)
-    :zIndex(zIndex)
-    :pointerCaptureMode(clay.POINTER_CAPTURE_MODE_CAPTURE)
-    :clipTo(clay.CLIP_TO_NONE)
+    :floating()
+      :root()
+      :attach(clay.ATTACH_POINT_LEFT_TOP, clay.ATTACH_POINT_LEFT_TOP)
+      :offset(trackX, trackY)
+      :zIndex(zIndex)
+      :pointerCaptureMode(clay.POINTER_CAPTURE_MODE_CAPTURE)
+      :clipTo(clay.CLIP_TO_NONE)
+      :done()
     :layoutDirection(H and clay.LEFT_TO_RIGHT or clay.TOP_TO_BOTTOM)
     :width(clay.SIZING_FIXED, H and viewW or trackW)
     :height(clay.SIZING_FIXED, H and trackW or viewH)
@@ -258,7 +251,7 @@ function scrollbar(viewport_id, content_id, wheel, opts)
           :width(clay.SIZING_FIXED, tlen)
           :height(clay.SIZING_GROW)
           :backgroundColor(C(thumbCol))
-          :borderColor(C(def.thumbBorder))
+          :borderColor(C(colors.thumbBorder))
           :borderWidth(1)
           :close()
 
@@ -276,7 +269,7 @@ function scrollbar(viewport_id, content_id, wheel, opts)
           :width(clay.SIZING_GROW)
           :height(clay.SIZING_FIXED, tlen)
           :backgroundColor(C(thumbCol))
-          :borderColor(C(def.thumbBorder))
+          :borderColor(C(colors.thumbBorder))
           :borderWidth(1)
           :close()
 

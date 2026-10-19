@@ -1,17 +1,20 @@
-local glfw = require("ffi.ffi_glfw")
+local window = require("window")
+local theme = require("theme")
 local utf8 = require("utf8")
 
 -- Virtualized List / Tree View for Clay
 
 local _lv_state = _lv_state or {} -- [rootId] -> state
 local _lv_stack = _lv_stack or {} -- open/close stack (optional)
+local MAX_TRANSITIONED_ROWS = 96
+local EMPTY_COLORS = {}
 
 -- transient mouse bookkeeping for release-based clicks
 local _lv_mouse_was_down      = _lv_mouse_was_down or false
 local _lv_pressed_row_key     = _lv_pressed_row_key or nil
 local _lv_pressed_tri_key     = _lv_pressed_tri_key or nil
 
-local function now_ms() return glfw.GetTime() * 1000.0 end
+local function now_ms() return window.time() * 1000.0 end
 
 local function default_get_key(item, idx)
     if type(item) == "string" then return idx end
@@ -89,26 +92,29 @@ local function listview_draw(elid, opts)
     assert(opts and opts.items, "listview: opts.items is required")
 
     -- mouse states
-    local down     = (glfw.GetMouseButton(device.win, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS)
+    local down     = (window.mouseButtonDown(window.MOUSE_BUTTON_LEFT))
     local was_down = _lv_mouse_was_down
     local released = (was_down and not down)
 
     -- config
-    local rowH     = opts.rowHeight or 22
-    local indent   = opts.indent or 16
-    local fontId   = opts.fontId or 0
-    local fontSize = opts.fontSize or 16
+    local componentDefaults = theme.defaults.listview
+    local rowH     = opts.rowHeight or componentDefaults.rowHeight
+    local indent   = opts.indent or componentDefaults.indent
+    local fontId   = opts.fontId or componentDefaults.fontId
+    local fontSize = opts.fontSize or theme.type.body
     local zebra    = (opts.zebra ~= false)
+    local transitionDuration = opts.transitionDuration or 0
     local getKey   = opts.getKey or default_get_key
     local getIcon  = opts.getIcon
 
-    local col      = opts.colors or {}
-    local c_bg     = col.bg      or {r=0,g=0,b=0,a=0}
-    local c_bgAlt  = col.bgAlt   or {r=255,g=255,b=255,a=6}
-    local c_hov    = col.hover   or {r=255,g=255,b=255,a=18}
-    local c_text   = col.text    or {r=230,g=230,b=240,a=255}
-    local c_selBg  = col.selBg   or {r=0,g=0,b=0,a=20}
-    local c_selTxt = col.selText or {r=255,g=255,b=255,a=255}
+    local col = opts.colors or EMPTY_COLORS
+    local defaults = theme.colors.listview
+    local c_bg     = col.bg      or defaults.bg
+    local c_bgAlt  = col.bgAlt   or defaults.bgAlt
+    local c_hov    = col.hover   or defaults.hover
+    local c_text   = col.text    or defaults.text
+    local c_selBg  = col.selBg   or defaults.selBg
+    local c_selTxt = col.selText or defaults.selText
 
     local rootId = elid.id
     local st = ensure_state(rootId)
@@ -133,70 +139,24 @@ local function listview_draw(elid, opts)
         local onScreen = math.ceil(viewH / rowH) + 2
         lastIdx  = math.min(total, firstIdx + onScreen - 1)
     end
+    -- Keep one list below half of Clay's fixed transition-state pool.
+    local animateRows = transitionDuration > 0 and (lastIdx - firstIdx + 1) <= MAX_TRANSITIONED_ROWS
 
-    -- Prebuild/reuse sizing objects where possible
-    local szGrowW   = clay.sizingGrow()
-    local szFitH    = clay.sizingFit()
-    local szRowH    = clay.sizingFixed(rowH)
     local triW      = math.floor(fontSize * 0.9)
-    local szTriW    = clay.sizingFixed(triW)
 
-    -- Root config (we are already inside clay.open(elid) from listview/listview_open)
-    clay.configure({
-        layout = {
-            layoutDirection = clay.TOP_TO_BOTTOM,
-            sizing = { width = szGrowW, height = szFitH },
-            childGap = 0
-        },
-        backgroundColor = c_bg
-    })
-
-    -- spacer config tables (mutated)
-    local spacerCfg = {
-        layout = { sizing = { width = szGrowW, height = clay.sizingFixed(0) } }
-    }
+    clay.element(elid)
+        :col()
+        :wGrow()
+        :hFit()
+        :bg(c_bg)
+        :open()
 
     if viewH and firstIdx > 1 then
-        spacerCfg.layout.sizing.height = clay.sizingFixed((firstIdx - 1) * rowH)
-        clay.open(clay.id("LVTopSpacer", 1, true))
-        clay.configure(spacerCfg)
-        clay.close()
+        clay.element(clay.id("LVTopSpacer", 1, true))
+            :wGrow()
+            :h((firstIdx - 1) * rowH)
+            :close()
     end
-
-    -- row/tri/content configs (tables reused per-iteration; only mutate a few fields)
-    local rowPadding = { left = 8, right = 8, top = 0, bottom = 0 }
-
-    local rowCfg = {
-        layout = {
-            layoutDirection = clay.LEFT_TO_RIGHT,
-            sizing = { width = szGrowW, height = szRowH },
-            childGap = 8,
-            padding = rowPadding,
-            childAlignment = { x = clay.ALIGN_X_LEFT, y = clay.ALIGN_Y_CENTER }
-        },
-        backgroundColor = nil,
-    }
-
-    local triCfg = {
-        layout = {
-            sizing = { width = szTriW, height = szRowH },
-            childAlignment = { x = clay.ALIGN_X_CENTER, y = clay.ALIGN_Y_CENTER }
-        }
-    }
-
-    local triSpacerCfg = {
-        layout = { sizing = { width = szTriW, height = szRowH } }
-    }
-
-    local contentCfg = {
-        layout = {
-            layoutDirection = clay.LEFT_TO_RIGHT,
-            sizing = { width = szGrowW, height = szRowH },
-            childGap = 8,
-            childAlignment = { x = clay.ALIGN_X_LEFT, y = clay.ALIGN_Y_CENTER }
-        },
-        backgroundColor = nil,
-    }
 
     local clickedKey = nil
 
@@ -207,25 +167,43 @@ local function listview_draw(elid, opts)
 
         -- zebra
         local yAlt = (zebra and (i % 2 == 0)) and c_bgAlt or nil
-        rowCfg.backgroundColor = row_is_sel and c_selBg or yAlt
-
-        -- indent (mutate padding left)
-        rowPadding.left = 8 + (v.depth * indent)
 
         local row_id     = clay.id("LVRow", kid, true)
         local tri_id     = clay.id("LVTri", kid, true)
         local trisp_id   = clay.id("LVTriSpacer", kid, true)
         local content_id = clay.id("LVContent", kid, true)
+        local row_is_hovered = clay.pointerOver(row_id)
+        local row_bg = row_is_sel and c_selBg or yAlt
+        if transitionDuration > 0 and row_is_hovered and not row_is_sel then
+            row_bg = c_hov
+        end
 
         -- ROW
-        clay.open(row_id)
-        clay.configure(rowCfg)
+        local row_builder = clay.element(row_id)
+            :row()
+            :wGrow()
+            :h(rowH)
+            :gap(theme.spacing.controlGap)
+            :padding(componentDefaults.paddingX + (v.depth * indent), 0, componentDefaults.paddingX, 0)
+            :alignLC()
+            :bg(row_bg)
+        if animateRows then
+            row_builder:transition(transitionDuration, "backgroundColor")
+        end
+        row_builder:open()
 
             -- TRIANGLE OR SPACER
             if v.hasChildren then
-                clay.open(tri_id)
-                clay.configure(triCfg)
-                    clay.createTextElement(draw_triangle(st.expanded[v.key] == true), {fontId=fontId, fontSize=fontSize, textColor=c_text})
+                clay.element(tri_id)
+                    :w(triW)
+                    :h(rowH)
+                    :alignCC()
+                    :open()
+                    clay.text(draw_triangle(st.expanded[v.key] == true))
+                        :fontId(fontId)
+                        :fontSize(fontSize)
+                        :textColor(c_text)
+                        :done()
                 clay.close()
 
                 if clay.pointerOver(tri_id) and down and not was_down then
@@ -235,30 +213,43 @@ local function listview_draw(elid, opts)
                     st.expanded[v.key] = not st.expanded[v.key]
                 end
             else
-                clay.open(trisp_id)
-                clay.configure(triSpacerCfg)
-                clay.close()
+                clay.element(trisp_id)
+                    :w(triW)
+                    :h(rowH)
+                    :close()
             end
 
-            -- CONTENT (hover background only on this region)
-            contentCfg.backgroundColor = clay.pointerOver(content_id) and c_hov or nil
-
-            clay.open(content_id)
-            clay.configure(contentCfg)
+            -- Without transitions, keep the legacy hover highlight on content.
+            local content_bg
+            if transitionDuration <= 0 and clay.pointerOver(content_id) then
+                content_bg = c_hov
+            end
+            local content_builder = clay.element(content_id)
+                :row()
+                :wGrow()
+                :h(rowH)
+                :gap(theme.spacing.controlGap)
+                :alignLC()
+                :bg(content_bg)
+            content_builder:open()
 
                 if getIcon then
                     local icon = getIcon(v.item)
                     if icon and icon ~= "" then
-                        clay.createTextElement(icon, {fontId=fontId, fontSize=fontSize, textColor=c_text})
+                        clay.text(icon)
+                            :fontId(fontId)
+                            :fontSize(fontSize)
+                            :textColor(c_text)
+                            :done()
                     end
                 end
 
                 local label = (type(v.item) == "string") and v.item or (v.item.text or tostring(v.key))
-                clay.createTextElement(label, {
-                    fontId=fontId,
-                    fontSize=fontSize,
-                    textColor=(row_is_sel and c_selTxt or c_text)
-                })
+                clay.text(label)
+                    :fontId(fontId)
+                    :fontSize(fontSize)
+                    :textColor(row_is_sel and c_selTxt or c_text)
+                    :done()
 
             clay.close()
 
@@ -274,10 +265,10 @@ local function listview_draw(elid, opts)
     end
 
     if viewH and lastIdx < total then
-        spacerCfg.layout.sizing.height = clay.sizingFixed((total - lastIdx) * rowH)
-        clay.open(clay.id("LVBotSpacer", 2, true))
-        clay.configure(spacerCfg)
-        clay.close()
+        clay.element(clay.id("LVBotSpacer", 2, true))
+            :wGrow()
+            :h((total - lastIdx) * rowH)
+            :close()
     end
 
     -- click resolution (single vs double)
@@ -301,7 +292,6 @@ end
 
 -- Public APIs (same surface)
 function listview(id, opts, children_fn)
-    clay.open(id)
     local api = listview_draw(id, opts)
     if children_fn then children_fn(api) end
     clay.close()
@@ -309,7 +299,6 @@ function listview(id, opts, children_fn)
 end
 
 function listview_open(id, opts)
-    clay.open(id)
     local api = listview_draw(id, opts)
     _lv_stack[#_lv_stack + 1] = api
     return api

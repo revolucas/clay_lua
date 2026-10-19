@@ -42,21 +42,10 @@ make clean
 ### Windows
 https://github.com/LuaJIT/LuaJIT
 
-## Building GLFW3
-### Linux
-```
-cmake -S . -B build \
-  -D CMAKE_BUILD_TYPE=Release \
-  -D BUILD_SHARED_LIBS=ON \            # ON for .so, OFF for static
-  -D GLFW_BUILD_DOCS=OFF \              # docs need extra tools; OFF for a quick build
-  -D GLFW_BUILD_TESTS=OFF \
-  -D GLFW_BUILD_EXAMPLES=OFF \
-  -D GLFW_BUILD_X11=ON \                # set to ON if you want X11
-  -D GLFW_BUILD_WAYLAND=OFF             # set to ON if you want Wayland
-cmake --build build -j
-```
-### Windows
-https://github.com/glfw/glfw/releases
+## Building RGFW
+RGFW 1.8.1 is vendored in `src/rgfw/` and built as part of Clay Lua:
+`make linux` or `make win64`. Linux requires the X11 development libraries
+listed in `BUILDING.md`; the Windows target uses MinGW-w64.
 
 ## Building Clay_Lua*
 Assumes LuaJIT shares a directory with Clay_Lua
@@ -65,5 +54,4 @@ Assumes LuaJIT shares a directory with Clay_Lua
 ```make```
 
 cross-compiling for windows:
-```make win64 CC=x86_64-w64-mingw32-gcc```
-
+```make win64 CC_WIN64=x86_64-w64-mingw32-gcc```

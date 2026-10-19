@@ -1,9 +1,11 @@
 -- component/color_picker_tex.lua
 local ffi  = require("ffi")
 local bgfx = require("ffi.ffi_bgfx")
-local glfw = require("ffi.ffi_glfw")
+local window = require("window")
+local theme = require("theme")
 
 local _state = _state or {} -- per-id
+local EMPTY_OPTIONS = {}
 
 local function clamp(x,a,b) if x<a then return a elseif x>b then return b end; return x end
 
@@ -127,19 +129,21 @@ local function update_textures(st, svW, svH, barW, barH, showAlpha)
   st._hDirty, st._hDirtyAll, st._aDirty, st._hsvDirty = false, false, false, false
 end
 
-local CP_BG     = { r=25,  g=25,  b=28,  a=160 }
-local CP_BORDER = { r=255, g=255, b=255, a=32  }
-
 -- returns rgba, changed, hsva
 function color_picker(elid, rgba_in, opts)
-  opts = opts or {}
+  opts = opts or EMPTY_OPTIONS
 
-  local width      = opts.width or 260
-  local height     = opts.height or 180
-  local pad        = opts.pad or 6
-  local barW       = opts.barWidth or 18
+  local componentDefaults = theme.defaults.colorPicker
+  local width      = opts.width or componentDefaults.width
+  local height     = opts.height or componentDefaults.height
+  local pad        = opts.pad or componentDefaults.padding
+  local barW       = opts.barWidth or componentDefaults.barWidth
   local showAlpha  = (opts.showAlpha ~= false)
-  local radius     = opts.cornerRadius or 6
+  local defaults = theme.colors.colorPicker
+  local colors = opts.colors
+  local bg = (colors and colors.bg) or defaults.bg
+  local border = (colors and colors.border) or defaults.border
+  local radius     = opts.cornerRadius or theme.radius.control
 
   local key = elid.id
   local st = _state[key]
@@ -200,8 +204,8 @@ function color_picker(elid, rgba_in, opts)
     :height(clay.SIZING_FIXED, height)
     :padding(pad)
     :childGap(pad)
-    :backgroundColor(CP_BG.r, CP_BG.g, CP_BG.b, CP_BG.a)
-    :borderColor(CP_BORDER.r, CP_BORDER.g, CP_BORDER.b, CP_BORDER.a)
+    :backgroundColor(bg.r, bg.g, bg.b, bg.a)
+    :borderColor(border.r, border.g, border.b, border.a)
     :borderWidth(1)
     :cornerRadius(radius)
     :children(function()
@@ -227,9 +231,8 @@ function color_picker(elid, rgba_in, opts)
     end)
 
   -- mouse
-  glfw.GetCursorPos(device.win, mouse_x, mouse_y)
-  local mx, my = mouse_x[0], mouse_y[0]
-  local down = (glfw.GetMouseButton(device.win, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS)
+  local mx, my = window.mousePosition()
+  local down = (window.mouseButtonDown(window.MOUSE_BUTTON_LEFT))
 
   local bSV = clay.getElementData(svId)
   local bH  = clay.getElementData(hueId)

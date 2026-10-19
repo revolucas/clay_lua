@@ -1,5 +1,6 @@
 -- component/property.lua (new builder API, no per-call default table churn)
-local glfw = require("ffi.ffi_glfw")
+local window = require("window")
+local theme = require("theme")
 
 local _prop_state = _prop_state or {} -- [id] -> { active=false, focused=false, lastDown=false, repeatT=0, dragStartX=0, dragStartV=0 }
 local _prop_keys  = _prop_keys  or {} -- key edge table
@@ -12,24 +13,6 @@ local PROP_DEFAULT = {
   max         = 1,
   step        = 0,
   pageStep    = nil, -- computed if nil
-  width       = 220,
-  height      = 28,
-  pad         = 6,   -- horizontal padding inside center
-  buttonW     = 28,
-  cornerRadius= 8,
-  fontId      = 0,
-  fontSize    = 16,
-  arrowFontId = 0,
-  arrowSize   = 20,
-  colors = {
-    bg     = { r=30,  g=30,  b=35,  a=140 },
-    bgHov  = { r=40,  g=40,  b=48,  a=160 },
-    bgAct  = { r=55,  g=55,  b=65,  a=190 },
-    text   = { r=235, g=235, b=245, a=255 },
-    btn    = { r=70,  g=70,  b=85,  a=170 },
-    btnHov = { r=85,  g=85,  b=110, a=200 },
-    btnAct = { r=110, g=110, b=150, a=220 },
-  }
 }
 
 local function clamp(x, a, b)
@@ -45,7 +28,7 @@ local function snap_step(x, step)
 end
 
 local function key_edge(win, key, keyTable)
-  local cur  = (glfw.GetKey(win, key) == glfw.PRESS)
+  local cur  = (window.keyDown(key))
   local last = keyTable[key] or false
   keyTable[key] = cur
   return (cur and not last), cur
@@ -59,7 +42,8 @@ end
 --   colors={ bg,bgHov,bgAct,text,btn,btnHov,btnAct } }
 function property(elid, label, value, opts)
   local def = PROP_DEFAULT
-  local dcol = def.colors
+  local componentDefaults = theme.defaults.property
+  local dcol = theme.colors.property
   local col = opts and opts.colors
 
   local minv = (opts and opts.min) or def.min
@@ -72,16 +56,16 @@ function property(elid, label, value, opts)
     pageStep = (step > 0 and step * 10 or (maxv - minv) * 0.1)
   end
 
-  local width   = (opts and opts.width)   or def.width
-  local height  = (opts and opts.height)  or def.height
-  local pad     = (opts and opts.pad)     or def.pad
-  local buttonW = (opts and opts.buttonW) or def.buttonW
-  local radius  = (opts and opts.cornerRadius) or def.cornerRadius
+  local width   = (opts and opts.width)   or componentDefaults.width
+  local height  = (opts and opts.height)  or componentDefaults.height
+  local pad     = (opts and opts.pad)     or componentDefaults.padding
+  local buttonW = (opts and opts.buttonW) or componentDefaults.buttonWidth
+  local radius  = (opts and opts.cornerRadius) or theme.radius.control
 
-  local fontId      = (opts and opts.fontId)      or def.fontId
-  local fontSize    = (opts and opts.fontSize)    or def.fontSize
-  local arrowFontId = (opts and opts.arrowFontId) or def.arrowFontId
-  local arrowSize   = (opts and opts.arrowSize)   or def.arrowSize
+  local fontId      = (opts and opts.fontId)      or componentDefaults.fontId
+  local fontSize    = (opts and opts.fontSize)    or theme.type.body
+  local arrowFontId = (opts and opts.arrowFontId) or componentDefaults.arrowFontId
+  local arrowSize   = (opts and opts.arrowSize)   or componentDefaults.arrowSize
 
   local c_bg     = (col and col.bg)     or dcol.bg
   local c_bgHov  = (col and col.bgHov)  or dcol.bgHov
@@ -92,10 +76,9 @@ function property(elid, label, value, opts)
   local c_btnAct = (col and col.btnAct) or dcol.btnAct
 
   -- input (read once)
-  glfw.GetCursorPos(device.win, mouse_x, mouse_y)
-  local mx, my = mouse_x[0], mouse_y[0]
-  local down   = (glfw.GetMouseButton(device.win, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS)
-  local nowT   = glfw.GetTime and glfw.GetTime() or 0
+  local mx, my = window.mousePosition()
+  local down   = (window.mouseButtonDown(window.MOUSE_BUTTON_LEFT))
+  local nowT   = window.time()
 
   -- state
   local key = elid.id
@@ -274,34 +257,34 @@ function property(elid, label, value, opts)
   -- keyboard (when focused)
   if st.focused then
     local shift =
-      (glfw.GetKey(device.win, glfw.KEY_LEFT_SHIFT) == glfw.PRESS) or
-      (glfw.GetKey(device.win, glfw.KEY_RIGHT_SHIFT) == glfw.PRESS)
+      (window.keyDown(window.KEY_LEFT_SHIFT)) or
+      (window.keyDown(window.KEY_RIGHT_SHIFT))
 
     local deltaSmall = (step > 0 and step or (maxv - minv) * 0.01)
     local deltaBig   = pageStep
 
-    if select(1, key_edge(device.win, glfw.KEY_LEFT, _prop_keys)) then
+    if select(1, key_edge(device.win, window.KEY_LEFT, _prop_keys)) then
       value = clamp(value - (shift and deltaBig or deltaSmall), minv, maxv)
       if step > 0 then value = snap_step(value, step) end
       changed = true
     end
-    if select(1, key_edge(device.win, glfw.KEY_RIGHT, _prop_keys)) then
+    if select(1, key_edge(device.win, window.KEY_RIGHT, _prop_keys)) then
       value = clamp(value + (shift and deltaBig or deltaSmall), minv, maxv)
       if step > 0 then value = snap_step(value, step) end
       changed = true
     end
-    if select(1, key_edge(device.win, glfw.KEY_HOME, _prop_keys)) then
+    if select(1, key_edge(device.win, window.KEY_HOME, _prop_keys)) then
       value, changed = minv, true
     end
-    if select(1, key_edge(device.win, glfw.KEY_END, _prop_keys)) then
+    if select(1, key_edge(device.win, window.KEY_END, _prop_keys)) then
       value, changed = maxv, true
     end
-    if select(1, key_edge(device.win, glfw.KEY_PAGE_DOWN, _prop_keys)) then
+    if select(1, key_edge(device.win, window.KEY_PAGE_DOWN, _prop_keys)) then
       value = clamp(value - deltaBig, minv, maxv)
       if step > 0 then value = snap_step(value, step) end
       changed = true
     end
-    if select(1, key_edge(device.win, glfw.KEY_PAGE_UP, _prop_keys)) then
+    if select(1, key_edge(device.win, window.KEY_PAGE_UP, _prop_keys)) then
       value = clamp(value + deltaBig, minv, maxv)
       if step > 0 then value = snap_step(value, step) end
       changed = true

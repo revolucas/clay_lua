@@ -1,17 +1,24 @@
 local cache = {}
 
-local glfw = require("ffi.ffi_glfw")
+local window = require("window")
+local theme = require("theme")
+
+local function C(c) return c.r, c.g, c.b, c.a end
 
 local page_selected = 1
-local pages = { "Home", "Corner Radius", "Long List", "Text Alignment", "Floating Inventory", "UI Controls"}
+local pages = { "Home", "Corner Radius", "Long List", "Text Alignment", "Floating Inventory", "UI Controls", "Node Editor", "Transitions"}
 local page_paths = {
 	"demo/page_home.lua", 
 	"demo/page_corner_radius.lua", 
 	"demo/page_longlist.lua", 
 	"demo/page_text_alignment.lua", 
 	"demo/page_floating_inventory.lua",
-	"demo/page_ui_controls.lua"
+	"demo/page_ui_controls.lua",
+	"demo/page_node_editor.lua",
+	"demo/page_transitions.lua"
 }
+local themeDropdownOptions = { width = 190 }
+local pendingTheme = nil
 
 -- Mouse click edge detection (so clicks only fire once per press)
 local prevMouseDown = false
@@ -27,33 +34,39 @@ local function SidebarItemComponent(label, i, mouse_down)
     local active  = page_selected == i
     local hovered = clay.pointerOver(sidebar_id)
 
-    local col = hovered and COLOR_SIDEBAR_BG_HOV or COLOR_SIDEBAR_BG_BASE
-    if active then col = COLOR_SIDEBAR_BG_ACT end
+    local colors = theme.colors
+    local col = hovered and colors.sidebarHover or colors.sidebar
+    if active then col = colors.sidebarActive end
 
-    clay.createElement(sidebar_id, {
-        layout = {
-            sizing = { width = clay.sizingGrow(), height = clay.sizingFixed(44) },
-            childAlignment = { y = clay.ALIGN_Y_CENTER },
-            padding = clay.paddingAll(12)
-        },
-        backgroundColor = col,
-        border = {
-            color = COLOR_WHITE_24,
-            width = { left=0, right=0, top=1, bottom=1 }
-        }
-    }, function()
-        if clay.hovered() and mouseClicked(mouse_down) then
-            page_selected = i
-        end
+    clay.element(sidebar_id)
+        :width(clay.SIZING_GROW)
+        :height(clay.SIZING_FIXED, theme.spacing.navItemHeight)
+        :childAlignment(clay.ALIGN_X_LEFT, clay.ALIGN_Y_CENTER)
+        :padding(theme.spacing.navItemPadding)
+        :backgroundColor(col.r, col.g, col.b, col.a)
+        :borderColor(C(colors.borderSubtle))
+        :borderWidth(0, 1, 0, 1)
+        :children(function()
+            if clay.hovered() and mouseClicked(mouse_down) then
+                page_selected = i
+            end
 
-        clay.createTextElement(label, { fontId=1, fontSize=16, textColor = COLOR_WHITE })
-    end)
+            clay.text(label)
+                :fontId(1)
+                :fontSize(16)
+                :textColor(C(colors.text))
+                :done()
+        end)
 end
 
 function layout(dt)
-    glfw.GetCursorPos(device.win, mouse_x, mouse_y)
-    local mx, my = mouse_x[0], mouse_y[0]
-    local down = glfw.GetMouseButton(device.win, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS
+    theme.resetScopes()
+    if pendingTheme then
+        theme.set(pendingTheme)
+        pendingTheme = nil
+    end
+    local mx, my = window.mousePosition()
+    local down = window.mouseButtonDown(window.MOUSE_BUTTON_LEFT)
 
     clay.setLayoutDimensions(device.width, device.height)
     clay.setPointerState(mx, my, down)
@@ -65,29 +78,49 @@ function layout(dt)
 	end
 				
     clay.beginLayout()
-    
-local function C(c) return c.r, c.g, c.b, c.a end
-
 clay.element("Root")
   :layoutDirection(clay.TOP_TO_BOTTOM)
   :width(clay.SIZING_FIXED, device.width)
   :height(clay.SIZING_FIXED, device.height)
-  :backgroundColor(C(COLOR_ROOT_BG))
+  :backgroundColor(C(theme.colors.root))
   :children(function()
 
     clay.element("Header")
+      :row()
       :width(clay.SIZING_GROW)
-      :height(clay.SIZING_FIXED, 48)
+      :height(clay.SIZING_FIXED, 60)
       :padding(12)
-      :backgroundColor(C(COLOR_HEADER_BG))
-      :borderColor(C(COLOR_WHITE_45))
+      :childGap(12)
+      :childAlignment(clay.ALIGN_X_LEFT, clay.ALIGN_Y_CENTER)
+      :backgroundColor(C(theme.colors.header))
+      :borderColor(C(theme.colors.borderStrong))
       :borderWidth(0, 0, 0, 1) -- l,t,r,b
       :children(function()
-        clay.text("[shadow][b]Clay Demo:\t[color=#ffA0A0]LuaJIT 2.1[/color] + [color=#A0A0ff]BGFX[/color] + [color=#00ff00]GLFW[/color][/b][/shadow]")
+        clay.text("[shadow][b]Clay Demo:\t[color=#ffA0A0]LuaJIT 2.1[/color] + [color=#A0A0ff]BGFX[/color] + [color=#00ff00]RGFW[/color][/b][/shadow]")
           :fontId(1)
-          :fontSize(16)
-          :textColor(C(COLOR_WHITE))
+          :fontSize(theme.type.body)
+          :textColor(C(theme.colors.text))
           :done()
+
+        clay.element("HeaderThemeSpacer")
+          :wGrow()
+          :h(1)
+          :close()
+
+        clay.text("Theme")
+          :fontId(1)
+          :fontSize(theme.type.small)
+          :textColor(C(theme.colors.textMuted))
+          :done()
+
+        themeDropdownOptions.rowHeight = theme.spacing.controlHeight
+        themeDropdownOptions.fontSize = theme.type.small
+        local selectedTheme, changed = clay.dropdown(
+          clay.id("ThemeSelector"), theme.options, theme.currentName,
+          themeDropdownOptions)
+        if changed then
+          pendingTheme = selectedTheme
+        end
       end)
 
     clay.element("MainRow")
@@ -101,11 +134,12 @@ clay.element("Root")
           :layoutDirection(clay.TOP_TO_BOTTOM)
           :width(clay.SIZING_FIXED, 220)
           :height(clay.SIZING_GROW)
-          :padding(12)
-          :childGap(8)
-          :backgroundColor(C(COLOR_SIDEBAR_BG_BASE))
-          :borderColor(C(COLOR_WHITE_32))
+          :padding(theme.spacing.panelPadding)
+          :childGap(theme.spacing.controlGap)
+          :backgroundColor(C(theme.colors.sidebar))
+          :borderColor(C(theme.colors.border))
           :borderWidth(0, 0, 1, 0) -- l,t,r,b
+          :style("compact")
           :children(function()
             for i, label in ipairs(pages) do
               SidebarItemComponent("[shadow][b]" .. label .. "[/b][/shadow]", i, down)
@@ -115,15 +149,15 @@ clay.element("Root")
         clay.element("Content")
           :width(clay.SIZING_GROW)
           :height(clay.SIZING_GROW)
-          :padding(8)
+          :padding(theme.spacing.controlGap)
           :layoutDirection(clay.TOP_TO_BOTTOM)
-          :backgroundColor(C(COLOR_CONTENT_BG))
+          :backgroundColor(C(theme.colors.content))
           :children(function()
 
             clay.text("Page: " .. pages[page_selected])
               :fontId(1)
               :fontSize(16)
-              :textColor(240, 240, 255, 255)
+              :textColor(C(theme.colors.text))
               :done()
 
             -- leaf element => explicit close
@@ -133,10 +167,10 @@ clay.element("Root")
               :close()
 
             clay.element("ScrollViewport")
-              :width(clay.SIZING_FIT)         -- matches clay.sizingFit()
+              :width(clay.SIZING_FIT)         -- fit the content width
               :height(clay.SIZING_GROW)
-              :padding(16, 16, 16, 0)         -- L,T,R,B
-              :borderColor(C(COLOR_WHITE_24))
+              :padding(theme.spacing.panelPadding, theme.spacing.panelPadding, theme.spacing.panelPadding, 0) -- L,T,R,B
+              :borderColor(C(theme.colors.borderSubtle))
               :borderWidth(0, 1, 0, 0)        -- top border only
               :clip(false, true)              -- horizontal, vertical
               :children(function()

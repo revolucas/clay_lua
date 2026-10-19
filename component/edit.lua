@@ -1,8 +1,7 @@
 -- edit.lua
 local window = require("window")
+local theme = require("theme")
 local font_manager = require("font_manager")
-local glfw = require("ffi.ffi_glfw")
-local ffi = require("ffi")
 local bit = require("bit")
 local bor, band, rsh = bit.bor, bit.band, bit.rshift
 
@@ -11,11 +10,12 @@ _edit_charbuf = _edit_charbuf or {}
 _edit_keys   = _edit_keys   or {}
 _edit_measure = font_manager.measureText
 _edit_repeat = _edit_repeat or {} -- [key] -> {down=false, next=0}
+local EMPTY_COLORS = {}
 
 -- repeat helper
 local function key_repeat(win, key, initialDelay, repeatInterval)
-    local now  = (glfw.GetTime and glfw.GetTime()) or 0
-    local down = (glfw.GetKey(win, key) == glfw.PRESS)
+    local now  = window.time()
+    local down = (window.keyDown(key))
     local st   = _edit_repeat[key]
     if not st then st = { down=false, next=0 }; _edit_repeat[key] = st end
 
@@ -102,7 +102,7 @@ end
 
 -- key edge
 local function key_edge(win, key)
-    local cur = glfw.GetKey(win, key) == glfw.PRESS
+    local cur = window.keyDown(key)
     local last = _edit_keys[key] or false
     _edit_keys[key] = cur
     return (cur and not last), cur
@@ -196,31 +196,32 @@ window.callback_register("window_set_char", set_char_callback)
 
 -- PUBLIC: edit(elid, text, opts) -> newText, changed, focused
 function edit(elid, text, opts)
-    glfw.GetCursorPos(device.win, mouse_x, mouse_y)
-    local mx, my = mouse_x[0], mouse_y[0]
-    local down = glfw.GetMouseButton(device.win, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS
-    local timeNow = glfw.GetTime and glfw.GetTime() or 0
+    local mx, my = window.mousePosition()
+    local down = window.mouseButtonDown(window.MOUSE_BUTTON_LEFT)
+    local timeNow = window.time()
 
     text = text or ""
     opts = opts or {}
 
-    local width    = opts.width or 200
-    local height   = opts.height or 24
-    local pad      = opts.pad or 8
-    local fontId   = opts.fontId or 1
-    local fontSize = opts.fontSize or 16
-    local maxChars = 2000--opts.maxChars or nil
+    local componentDefaults = theme.defaults.edit
+    local width    = opts.width or componentDefaults.width
+    local height   = opts.height or componentDefaults.height
+    local pad      = opts.pad or componentDefaults.padding
+    local fontId   = opts.fontId or componentDefaults.fontId
+    local fontSize = opts.fontSize or theme.type.body
+    local maxChars = opts.maxChars or 2000
     local filterOpt= opts.filter or nil
 
-    local col = opts.colors or {}
-    local c_bg    = col.bg    or {r=30,  g=30,  b=35,  a=160}
-    local c_bgHov = col.bgHov or {r=40,  g=40,  b=48,  a=190}
-    local c_bgAct = col.bgAct or {r=50,  g=50,  b=60,  a=220}
-    local c_border= col.border or {r=255, g=255, b=255, a=64}
-    local c_text  = col.text  or {r=235, g=235, b=245, a=255}
-    local c_caret = col.caret or {r=180, g=200, b=255, a=255}
-    local c_selBg = col.selBg or {r=90,  g=120, b=180, a=120}
-    local c_selTxt= col.selTxt or c_text
+    local col = opts.colors or EMPTY_COLORS
+    local defaults = theme.colors.edit
+    local c_bg    = col.bg    or defaults.bg
+    local c_bgHov = col.bgHov or defaults.bgHov
+    local c_bgAct = col.bgAct or defaults.bgAct
+    local c_border= col.border or defaults.border
+    local c_text  = col.text  or defaults.text
+    local c_caret = col.caret or defaults.caret
+    local c_selBg = col.selBg or defaults.selBg
+    local c_selTxt= col.selTxt or defaults.selTxt
 
     local key = elid.id
     local st = _edit_state[key]
@@ -233,6 +234,13 @@ function edit(elid, text, opts)
             _selId   = clay.id("sel",   key),
         }
         _edit_state[key] = st
+    end
+
+    if opts.focusOnCreate and not st.focusOnCreateApplied then
+        _edit_charbuf = {}
+        st.focused = true
+        st.focusOnCreateApplied = true
+        st.blinkT = timeNow
     end
 
     local changed = false
@@ -309,6 +317,11 @@ function edit(elid, text, opts)
     -- mouse press / focus
     if (not st.downLast) and down then
         if hovered then
+            -- The character buffer is shared by all edit widgets. Clear stale
+            -- input when this widget takes focus, but leave it alone on
+            -- unfocused widgets so a later focused widget in the same layout
+            -- pass can consume the characters.
+            if not st.focused then _edit_charbuf = {} end
             st.focused = true
             local box = clay.getElementData(elid)
             local localX = (box.found and (mx - box.x - pad) or 0)
@@ -332,6 +345,7 @@ function edit(elid, text, opts)
             clamp_after_change()
             st.blinkT = timeNow
         else
+            if st.focused then _edit_charbuf = {} end
             st.focused = false
             st.sel_a, st.sel_b = 0, 0
         end
@@ -372,8 +386,6 @@ function edit(elid, text, opts)
         clamp_after_change()
         changed = true
         st.blinkT = timeNow
-    elseif (not st.focused) and #_edit_charbuf > 0 then
-        _edit_charbuf = {}
     end
 
     -- keyboard editing
@@ -391,7 +403,7 @@ function edit(elid, text, opts)
             changed = true
         end
 
-        local backspaceTick = key_repeat(device.win, glfw.KEY_BACKSPACE, 0.45, 0.04)
+        local backspaceTick = key_repeat(device.win, window.KEY_BACKSPACE, 0.45, 0.04)
         if backspaceTick then
             if has_sel() then
                 del_sel()
@@ -405,7 +417,7 @@ function edit(elid, text, opts)
             st.blinkT = timeNow
         end
 
-        local press = key_edge(device.win, glfw.KEY_DELETE)
+        local press = key_edge(device.win, window.KEY_DELETE)
         if press then
             if has_sel() then
                 del_sel()
@@ -419,13 +431,13 @@ function edit(elid, text, opts)
         end
 
         local ctrl =
-            (glfw.GetKey(device.win, glfw.KEY_LEFT_CONTROL) == glfw.PRESS) or
-            (glfw.GetKey(device.win, glfw.KEY_RIGHT_CONTROL) == glfw.PRESS)
+            (window.keyDown(window.KEY_LEFT_CONTROL)) or
+            (window.keyDown(window.KEY_RIGHT_CONTROL))
         local shift =
-            (glfw.GetKey(device.win, glfw.KEY_LEFT_SHIFT) == glfw.PRESS) or
-            (glfw.GetKey(device.win, glfw.KEY_RIGHT_SHIFT) == glfw.PRESS)
+            (window.keyDown(window.KEY_LEFT_SHIFT)) or
+            (window.keyDown(window.KEY_RIGHT_SHIFT))
 
-        press = key_edge(device.win, glfw.KEY_LEFT)
+        press = key_edge(device.win, window.KEY_LEFT)
         if press then
             local newBi = ctrl and word_left_byte(text, st.caret) or utf8_prev_index(text, st.caret)
             if shift then
@@ -439,7 +451,7 @@ function edit(elid, text, opts)
             st.blinkT = timeNow
         end
 
-        press = key_edge(device.win, glfw.KEY_RIGHT)
+        press = key_edge(device.win, window.KEY_RIGHT)
         if press then
             local newBi = ctrl and word_right_byte(text, st.caret) or utf8_next_index(text, st.caret)
             if shift then
@@ -453,7 +465,7 @@ function edit(elid, text, opts)
             st.blinkT = timeNow
         end
 
-        press = key_edge(device.win, glfw.KEY_HOME)
+        press = key_edge(device.win, window.KEY_HOME)
         if press then
             if shift then
                 if st.sel_a == 0 and st.sel_b == 0 then st.sel_a = st.caret end
@@ -466,7 +478,7 @@ function edit(elid, text, opts)
             st.blinkT = timeNow
         end
 
-        press = key_edge(device.win, glfw.KEY_END)
+        press = key_edge(device.win, window.KEY_END)
         if press then
             local endBi = #text + 1
             if shift then
@@ -489,7 +501,7 @@ function edit(elid, text, opts)
                 changed = true
                 st.blinkT = timeNow
             end
-            press = key_edge(device.win, glfw.KEY_DELETE)
+            press = key_edge(device.win, window.KEY_DELETE)
             if press and not has_sel() then
                 local bi1 = word_right_byte(text, st.caret)
                 text = text:sub(1, st.caret - 1) .. text:sub(bi1)
@@ -497,7 +509,7 @@ function edit(elid, text, opts)
                 changed = true
                 st.blinkT = timeNow
             end
-            press = key_edge(device.win, glfw.KEY_A)
+            press = key_edge(device.win, window.KEY_A)
             if press then
                 st.sel_a, st.sel_b = 1, #text + 1
                 st.caret = st.sel_b
@@ -510,19 +522,17 @@ function edit(elid, text, opts)
     -- clipboard
     if st.focused then
         local ctrlHeld =
-            (glfw.GetKey(device.win, glfw.KEY_LEFT_CONTROL) == glfw.PRESS) or
-            (glfw.GetKey(device.win, glfw.KEY_RIGHT_CONTROL) == glfw.PRESS)
+            (window.keyDown(window.KEY_LEFT_CONTROL)) or
+            (window.keyDown(window.KEY_RIGHT_CONTROL))
 
         local function get_clip()
-            local p = glfw.GetClipboardString(device.win) or ""
-            if p then return ffi.string(p) end
-            return ""
+            return window.clipboardText() or ""
         end
-        local function set_clip(s) glfw.SetClipboardString(device.win, s) end
+        local function set_clip(s) window.setClipboardText(s) end
 
-        local pressC = key_edge(device.win, glfw.KEY_C)
-        local pressX = key_edge(device.win, glfw.KEY_X)
-        local pressV = key_edge(device.win, glfw.KEY_V)
+        local pressC = key_edge(device.win, window.KEY_C)
+        local pressX = key_edge(device.win, window.KEY_X)
+        local pressV = key_edge(device.win, window.KEY_V)
 
         if ctrlHeld and (pressC or pressX) then
             local a, b = st.sel_a, st.sel_b
@@ -604,8 +614,8 @@ function edit(elid, text, opts)
     clay.element(elid)
         :layoutDirection(clay.LEFT_TO_RIGHT)
         :childAlignment(clay.ALIGN_X_LEFT, clay.ALIGN_Y_CENTER)
-        :width(clay.SIZING_TYPE_FIXED, width)
-        :height(clay.SIZING_TYPE_FIXED, height)
+        :width(clay.SIZING_FIXED, width)
+        :height(clay.SIZING_FIXED, height)
         :padding(pad, 0, pad, 0) -- l,t,r,b
         :childGap(0)
         --:clipHorizontal(true)          -- Breaks scroll clipping for some reason
@@ -626,8 +636,8 @@ function edit(elid, text, opts)
                 local caretInside = (caretBi >= b0 and caretBi <= b1)
                 if caretInside and showCaret then
                     clay.element(st._caretId)
-                        :width(clay.SIZING_TYPE_FIXED, 1)
-                        :height(clay.SIZING_TYPE_FIXED, math.floor(height * 0.65))
+                        :width(clay.SIZING_FIXED, 1)
+                        :height(clay.SIZING_FIXED, math.floor(height * 0.65))
                         :padding(1,0,1,0)
                         :backgroundColor(c_caret.r, c_caret.g, c_caret.b, c_caret.a)
                         :close()

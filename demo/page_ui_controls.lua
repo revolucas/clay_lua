@@ -12,6 +12,9 @@ local val = 50
 local gain = 0.5
 local panelW, panelH = 280, 180
 local picked = { r = 255, g = 0, b = 0, a = 255 }
+local tableFilter = ""
+local selectedFileCount = 0
+local function fileRowKey(row) return row.id end
 
 local nodes = {
   { text="src", key="dir:src", icon=ICO_FOLDER, children={
@@ -28,16 +31,20 @@ local nodes = {
 }
 
 local columns = {
-  { id="name", title="Name", width=220 },
-  { id="size", title="Size", width=80 },
-  { id="kind", title="Type", width=80 },
+  { id="name", title="Name", width=220, minWidth=120, editable=true, editOnDoubleClick=false },
+  { id="size", title="Size", width=90, align="right",
+    getValue=function(row) return row.sizeBytes end,
+    filterValue=function(row) return math.floor(row.sizeBytes / 1024) .. " KB" end,
+    format=function(sizeBytes) return math.floor(sizeBytes / 1024) .. " KB" end },
+  { id="kind", title="Type", width=90 },
 }
 
 local rows = {
-  { name="main.lua",   size="4 KB", kind="Lua"    },
-  { name="window.lua", size="3 KB", kind="Lua"    },
-  { name="assets",     size="-",    kind="Folder" },
+  { id="file:main.lua",   name="main.lua",   sizeBytes=4096, kind="Lua" },
+  { id="file:window.lua", name="window.lua", sizeBytes=3072, kind="Lua" },
+  { id="dir:assets",      name="assets",     sizeBytes=0,    kind="Folder" },
 }
+local tableFilterColumns = { "name", "kind" }
 
 function layout(dt)
   -- CHECKBOX (already "new style" API)
@@ -46,7 +53,7 @@ function layout(dt)
   -- RADIO
   clay.text("What is your favorite fruit?")
     :fontId(1):fontSize(22)
-    :textColor(230, 230, 240, 255)
+    :textColor(C(theme.colors.text))
     :done()
 
   clay.element("RadioGroup1")
@@ -64,7 +71,7 @@ function layout(dt)
   -- RADIO (allow-none)
   clay.text("What is your favorite game?")
     :fontId(1):fontSize(22)
-    :textColor(230, 230, 240, 255)
+    :textColor(C(theme.colors.text))
     :done()
 
   clay.element("RadioGroup2")
@@ -99,7 +106,7 @@ function layout(dt)
 
       clay.text(tostring(val))
         :fontId(1):fontSize(16)
-        :textColor(230, 230, 240, 255)
+        :textColor(C(theme.colors.text))
         :done()
     end)
 
@@ -125,7 +132,7 @@ function layout(dt)
   -- COLOR PICKER
   clay.text("Color Picker")
     :fontId(1):fontSize(22)
-    :textColor(230, 230, 240, 255)
+    :textColor(C(theme.colors.text))
     :done()
 
   local changed = false
@@ -134,10 +141,6 @@ function layout(dt)
     showAlpha = true,
     matrixSteps = 22, hueSteps = 48, alphaSteps = 48,
     barWidth = 18,
-    colors = {
-      border = { r = 255, g = 255, b = 255, a = 36 },
-      bg     = { r = 25,  g = 25,  b = 28,  a = 160 },
-    }
   })
 
   -- swatch (element builder)
@@ -149,28 +152,62 @@ function layout(dt)
     :children(function()
       clay.text(string.format("#%02X%02X%02X%02X", picked.r, picked.g, picked.b, picked.a))
         :fontId(0):fontSize(16)
-        :textColor(230, 230, 240, 255)
+        :textColor(C(theme.colors.text))
         :done()
     end)
 
   -- TABLEVIEW (widget API)
+  clay.text("Files — click headers to sort, drag dividers to resize, Ctrl-click to select, F2 to rename")
+    :fontId(1):fontSize(14)
+    :textColor(C(theme.colors.textMuted))
+    :done()
+
+  clay.text("Filter files by name or type:")
+    :fontId(1):fontSize(12)
+    :textColor(C(theme.colors.textMuted))
+    :done()
+
+  tableFilter = clay.edit(clay.id("table-filter"), tableFilter, {
+    width = 260,
+    filter = "ascii",
+    maxChars = 64,
+  })
+
   local api = clay.tableview(
     clay.id("FileTable"),
     { columns = columns, rows = rows },
     {
-      viewport_id = clay.id("ScrollViewport"),
+      height = 220,
+      filter = tableFilter,
+      filterColumns = tableFilterColumns,
+      selectionMode = "multiple",
+      copyHeaders = true,
+      getRowKey = fileRowKey,
+      onSelectionChanged = function(selectedRows)
+        selectedFileCount = #selectedRows
+      end,
       onActivate = function(row, idx)
         print("Activated row", idx, row.name)
       end,
+      onDoubleClick = function(row)
+        print("Open row", row.name)
+      end,
       cellRenderer = function(col, row, r, c)
         if col.id == "name" and row.kind == "Folder" then
-          clay.createTextElement(ICO_FOLDER .. " " .. row.name, { fontId=1, fontSize=14 })
+          clay.text(ICO_FOLDER .. " " .. row.name):fontId(1):fontSize(14):done()
+        elseif col.id == "size" then
+          clay.text(math.floor(row.sizeBytes / 1024) .. " KB"):fontId(1):fontSize(14):done()
         else
-          clay.createTextElement(tostring(row[col.id] or ""), { fontId=1, fontSize=14 })
+          clay.text(tostring(row[col.id] or "")):fontId(1):fontSize(14):done()
         end
       end,
     }
   )
+  clay.text(string.format("%d of %d files selected · %d match the filter",
+      selectedFileCount, api.rowCount, api.filteredCount))
+    :fontId(1):fontSize(12)
+    :textColor(C(theme.colors.textMuted))
+    :done()
 
   -- RESIZABLE panel element
   local panelId = clay.id("demo-resize-panel")
@@ -179,7 +216,7 @@ function layout(dt)
     :height(clay.SIZING_FIXED, panelH)
     :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
     :padding(12)
-    :backgroundColor(30, 46, 75, 255)
+    :backgroundColor(C(theme.colors.surface))
     :borderColor(C(COLOR_WHITE_32))
     :borderWidth(1)
     :cornerRadius(8)
