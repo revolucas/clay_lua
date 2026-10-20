@@ -1,6 +1,7 @@
 -- Node graph editor built from Clay elements plus one batched custom draw command.
 local window = require("window")
 local theme = require("theme")
+local ComponentBuilder = require("component.builder")
 
 _node_editor_state = _node_editor_state or {}
 
@@ -57,6 +58,37 @@ function NodeBuilder:width(value)
   return self
 end
 
+function NodeBuilder:label(value)
+  node_builder_data(self).label = value
+  return self
+end
+
+function NodeBuilder:value(value)
+  node_builder_data(self).value = value
+  return self
+end
+
+function NodeBuilder:range(minimum, maximum)
+  local data = node_builder_data(self)
+  data.min, data.max = minimum, maximum
+  return self
+end
+
+function NodeBuilder:step(value)
+  node_builder_data(self).step = value
+  return self
+end
+
+function NodeBuilder:format(callback)
+  node_builder_data(self).format = callback
+  return self
+end
+
+function NodeBuilder:data(name, value)
+  node_builder_data(self)[name] = value
+  return self
+end
+
 function NodeBuilder:height(value)
   node_builder_data(self).height = value
   return self
@@ -83,10 +115,10 @@ function NodeBuilder:open()
   return self
 end
 
-function NodeBuilder:children(callback, contentHeight)
+function NodeBuilder:content(callback, contentHeight)
   local data = node_builder_data(self)
-  if not self._open then error("call node:open() before node:children()", 2) end
-  if type(callback) ~= "function" then error("node:children expects a function", 2) end
+  if not self._open then error("call node:open() before node:content()", 2) end
+  if type(callback) ~= "function" then error("node:content expects a function", 2) end
   data.content = callback
   if contentHeight ~= nil then data.contentHeight = contentHeight end
   return self
@@ -475,14 +507,14 @@ local function pin_visual(direction, graphKey, nodeKey, pin, index, opts, zoom)
     :width(clay.SIZING_FIXED, size)
     :height(clay.SIZING_FIXED, size)
     :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
-    :children(function()
-      clay.element(clay.id("NodeEditorPinDot:" .. graphKey .. ":" .. key(nodeKey) .. ":" .. direction .. ":" .. key(pin_key(pin, index))))
-        :width(clay.SIZING_FIXED, dot)
-        :height(clay.SIZING_FIXED, dot)
-        :backgroundColor(col.r, col.g, col.b, col.a)
-        :cornerRadius(-1, -1, -1, -1)
-        :close()
-    end)
+    :open()
+  clay.element(clay.id("NodeEditorPinDot:" .. graphKey .. ":" .. key(nodeKey) .. ":" .. direction .. ":" .. key(pin_key(pin, index))))
+    :width(clay.SIZING_FIXED, dot)
+    :height(clay.SIZING_FIXED, dot)
+    :backgroundColor(col.r, col.g, col.b, col.a)
+    :cornerRadius(-1, -1, -1, -1)
+    :close()
+  clay.close()
 end
 
 local function port_slot(graphKey, nodeKey, pin, index, direction, opts, zoom)
@@ -494,21 +526,21 @@ local function port_slot(graphKey, nodeKey, pin, index, direction, opts, zoom)
     :height(clay.SIZING_GROW)
     :childGap(math.max(3, math.floor(defaults.pinGap * zoom)))
     :childAlignment(direction == "in" and clay.ALIGN_X_LEFT or clay.ALIGN_X_RIGHT, clay.ALIGN_Y_CENTER)
-    :children(function()
-      if direction == "in" then
-        pin_visual(direction, graphKey, nodeKey, pin, index, opts, zoom)
-        clay.text(label):fontId(opts.fontId or defaults.fontId)
-          :fontSize(math.max(9, math.floor((opts.fontSize or theme.type.small) * zoom + 0.5)))
-        :textColor((opts.textColor or theme.colors.nodeEditor.textColor).r, (opts.textColor or theme.colors.nodeEditor.textColor).g,
-              (opts.textColor or theme.colors.nodeEditor.textColor).b, (opts.textColor or theme.colors.nodeEditor.textColor).a):done()
-      else
-        clay.text(label):fontId(opts.fontId or defaults.fontId)
-          :fontSize(math.max(9, math.floor((opts.fontSize or theme.type.small) * zoom + 0.5)))
-          :textColor((opts.textColor or theme.colors.nodeEditor.textColor).r, (opts.textColor or theme.colors.nodeEditor.textColor).g,
-              (opts.textColor or theme.colors.nodeEditor.textColor).b, (opts.textColor or theme.colors.nodeEditor.textColor).a):done()
-        pin_visual(direction, graphKey, nodeKey, pin, index, opts, zoom)
-      end
-    end)
+    :open()
+  if direction == "in" then
+    pin_visual(direction, graphKey, nodeKey, pin, index, opts, zoom)
+    clay.text(label):fontId(opts.fontId or defaults.fontId)
+      :fontSize(math.max(9, math.floor((opts.fontSize or theme.type.small) * zoom + 0.5)))
+      :textColor((opts.textColor or theme.colors.nodeEditor.textColor).r, (opts.textColor or theme.colors.nodeEditor.textColor).g,
+            (opts.textColor or theme.colors.nodeEditor.textColor).b, (opts.textColor or theme.colors.nodeEditor.textColor).a):done()
+  else
+    clay.text(label):fontId(opts.fontId or defaults.fontId)
+      :fontSize(math.max(9, math.floor((opts.fontSize or theme.type.small) * zoom + 0.5)))
+      :textColor((opts.textColor or theme.colors.nodeEditor.textColor).r, (opts.textColor or theme.colors.nodeEditor.textColor).g,
+            (opts.textColor or theme.colors.nodeEditor.textColor).b, (opts.textColor or theme.colors.nodeEditor.textColor).a):done()
+    pin_visual(direction, graphKey, nodeKey, pin, index, opts, zoom)
+  end
+  clay.close()
 end
 
 local function draw_node(graphKey, node, index, opts, st)
@@ -534,7 +566,7 @@ local function draw_node(graphKey, node, index, opts, st)
 
   clay.element(id)
     :floating()
-      :parent()
+      :to(st.canvasId)
       :attach(clay.ATTACH_POINT_LEFT_TOP, clay.ATTACH_POINT_LEFT_TOP)
       :offset(st.panX + nx * zoom, st.panY + ny * zoom)
       :zIndex(z)
@@ -547,75 +579,75 @@ local function draw_node(graphKey, node, index, opts, st)
         (opts.nodeColor or theme.colors.nodeEditor.nodeColor).b, (opts.nodeColor or theme.colors.nodeEditor.nodeColor).a)
     :cornerRadius(defaults.cornerRadius * zoom)
     :borderColor(borderColor.r, borderColor.g, borderColor.b, borderColor.a)
-    :borderWidth(math.max(1, zoom))
-    :children(function()
-      clay.element(header_id(graphKey, nodeKey))
+    :borderWidth(math.max(1, math.floor(zoom + 0.5)))
+    :open()
+  clay.element(header_id(graphKey, nodeKey))
+    :width(clay.SIZING_GROW)
+    :height(clay.SIZING_FIXED, headerHeight)
+    :padding(defaults.headerPadding * zoom, 0, defaults.headerPadding * zoom, 0)
+    :backgroundColor((node.headerColor or opts.headerColor or theme.colors.nodeEditor.headerColor).r,
+        (node.headerColor or opts.headerColor or theme.colors.nodeEditor.headerColor).g,
+        (node.headerColor or opts.headerColor or theme.colors.nodeEditor.headerColor).b,
+        (node.headerColor or opts.headerColor or theme.colors.nodeEditor.headerColor).a)
+    :cornerRadius(defaults.cornerRadius * zoom, defaults.cornerRadius * zoom, 0, 0)
+    :childAlignment(clay.ALIGN_X_LEFT, clay.ALIGN_Y_CENTER)
+    :open()
+  clay.text(node.title or node.label or key(nodeKey))
+    :fontId(opts.fontId or defaults.fontId)
+    :fontSize(math.max(10, math.floor((opts.fontSize or theme.type.small) * zoom + 1)))
+    :textColor((opts.textColor or theme.colors.nodeEditor.textColor).r, (opts.textColor or theme.colors.nodeEditor.textColor).g,
+        (opts.textColor or theme.colors.nodeEditor.textColor).b, (opts.textColor or theme.colors.nodeEditor.textColor).a)
+    :done()
+  clay.close() -- node header
+
+  clay.element(clay.id("NodeEditorBody:" .. graphKey .. ":" .. key(nodeKey)))
+    :layoutDirection(clay.TOP_TO_BOTTOM)
+    :width(clay.SIZING_GROW)
+    :height(clay.SIZING_GROW)
+    :clip(true, true)
+    :padding(bodyPadding)
+    :childGap(0)
+    :open()
+  if type(node.content) == "function" then
+    clay.element(content_id(graphKey, nodeKey))
+      :layoutDirection(clay.LEFT_TO_RIGHT)
+      :width(clay.SIZING_GROW)
+      :height(clay.SIZING_FIXED, contentHeight)
+      :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
+      :open()
+    node.content(node, zoom, nodeWidth - 2 * bodyPadding)
+    clay.close() -- node custom content
+
+    if contentGap > 0 then
+      clay.element(clay.id("NodeEditorContentGap:" .. graphKey .. ":" .. key(nodeKey)))
         :width(clay.SIZING_GROW)
-        :height(clay.SIZING_FIXED, headerHeight)
-        :padding(defaults.headerPadding * zoom, 0, defaults.headerPadding * zoom, 0)
-        :backgroundColor((node.headerColor or opts.headerColor or theme.colors.nodeEditor.headerColor).r,
-            (node.headerColor or opts.headerColor or theme.colors.nodeEditor.headerColor).g,
-            (node.headerColor or opts.headerColor or theme.colors.nodeEditor.headerColor).b,
-            (node.headerColor or opts.headerColor or theme.colors.nodeEditor.headerColor).a)
-        :cornerRadius(defaults.cornerRadius * zoom, defaults.cornerRadius * zoom, 0, 0)
-        :childAlignment(clay.ALIGN_X_LEFT, clay.ALIGN_Y_CENTER)
-        :children(function()
-          clay.text(node.title or node.label or key(nodeKey))
-            :fontId(opts.fontId or defaults.fontId)
-            :fontSize(math.max(10, math.floor((opts.fontSize or theme.type.small) * zoom + 1)))
-            :textColor((opts.textColor or theme.colors.nodeEditor.textColor).r, (opts.textColor or theme.colors.nodeEditor.textColor).g,
-                (opts.textColor or theme.colors.nodeEditor.textColor).b, (opts.textColor or theme.colors.nodeEditor.textColor).a)
-            :done()
-        end)
+        :height(clay.SIZING_FIXED, contentGap)
+        :close()
+    end
+  end
 
-      clay.element(clay.id("NodeEditorBody:" .. graphKey .. ":" .. key(nodeKey)))
-        :layoutDirection(clay.TOP_TO_BOTTOM)
-        :width(clay.SIZING_GROW)
-        :height(clay.SIZING_GROW)
-        :clip(true, true)
-        :padding(bodyPadding)
-        :childGap(0)
-        :children(function()
-          if type(node.content) == "function" then
-            clay.element(content_id(graphKey, nodeKey))
-              :layoutDirection(clay.LEFT_TO_RIGHT)
-              :width(clay.SIZING_GROW)
-              :height(clay.SIZING_FIXED, contentHeight)
-              :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
-              :children(function()
-                node.content(node, zoom, nodeWidth - 2 * bodyPadding)
-              end)
-
-            if contentGap > 0 then
-              clay.element(clay.id("NodeEditorContentGap:" .. graphKey .. ":" .. key(nodeKey)))
-                :width(clay.SIZING_GROW)
-                :height(clay.SIZING_FIXED, contentGap)
-                :close()
-            end
-          end
-
-          for row = 1, rowCount do
-            clay.element(clay.id("NodeEditorRow:" .. graphKey .. ":" .. key(nodeKey), row, true))
-              :layoutDirection(clay.LEFT_TO_RIGHT)
-              :width(clay.SIZING_GROW)
-              :height(clay.SIZING_FIXED, rowHeight)
-              :children(function()
-                if inputs[row] then
-                  port_slot(graphKey, nodeKey, inputs[row], row, "in", opts, zoom)
-                else
-                  clay.element(clay.id("NodeEditorInputSpacer:" .. graphKey .. ":" .. key(nodeKey), row, true))
-                    :width(clay.SIZING_GROW):height(clay.SIZING_GROW):close()
-                end
-                if outputs[row] then
-                  port_slot(graphKey, nodeKey, outputs[row], row, "out", opts, zoom)
-                else
-                  clay.element(clay.id("NodeEditorOutputSpacer:" .. graphKey .. ":" .. key(nodeKey), row, true))
-                    :width(clay.SIZING_GROW):height(clay.SIZING_GROW):close()
-                end
-              end)
-          end
-        end)
-    end)
+  for row = 1, rowCount do
+    clay.element(clay.id("NodeEditorRow:" .. graphKey .. ":" .. key(nodeKey), row, true))
+      :layoutDirection(clay.LEFT_TO_RIGHT)
+      :width(clay.SIZING_GROW)
+      :height(clay.SIZING_FIXED, rowHeight)
+      :open()
+    if inputs[row] then
+      port_slot(graphKey, nodeKey, inputs[row], row, "in", opts, zoom)
+    else
+      clay.element(clay.id("NodeEditorInputSpacer:" .. graphKey .. ":" .. key(nodeKey), row, true))
+        :width(clay.SIZING_GROW):height(clay.SIZING_GROW):close()
+    end
+    if outputs[row] then
+      port_slot(graphKey, nodeKey, outputs[row], row, "out", opts, zoom)
+    else
+      clay.element(clay.id("NodeEditorOutputSpacer:" .. graphKey .. ":" .. key(nodeKey), row, true))
+        :width(clay.SIZING_GROW):height(clay.SIZING_GROW):close()
+    end
+    clay.close() -- node row
+  end
+  clay.close() -- node body
+  clay.close() -- node panel
 end
 
 local function compatible(a, b)
@@ -633,16 +665,17 @@ local function make_link(a, b)
   }
 end
 
--- clay.node_editor(graphId, { nodes=..., links=..., onConnect=..., onDisconnect=..., onNodeMoved=... })
--- Nodes can be plain tables or created with clay.node(id, options):title():position():
--- input()/output():open():children(callback, height):close(). The child callback receives
+-- Configure graphs and nodes through fluent builders:
+-- clay.node_editor(graphId):nodes(nodes):links(links):width(w):height(h):draw()
+-- Nodes can be plain tables or built with clay.node(id):title():position():
+-- input()/output():open():content(callback, height):close(). Node content receives
 -- (node, zoom, contentWidth), so it can declare any Clay content inside the node panel.
 -- contentHeight reserves logical pixels for that custom Clay content. Clicks in node content
 -- are left to its widgets instead of starting a node drag unless contentInteractive=false.
 -- Pins contain id/label/type/[color].
 -- Selection, links, node positions, and history are mutable by default. Callbacks let
 -- an application own graph changes; onHistoryRestore receives snapshots for that case.
-function node_editor(graphId, opts)
+local function render_node_editor(graphId, opts)
   opts = opts or {}
   local graphKey = key(graphId)
   local nodes = opts.nodes or {}
@@ -735,6 +768,13 @@ function node_editor(graphId, opts)
     st.panY = (height - boundsH * st.zoom) * 0.5 - minY * st.zoom
   end
 
+  -- Frame the graph once on first display. Later calls preserve the user's
+  -- pan and zoom; an empty graph can still receive nodes and fit when they do.
+  if not st.initialFitDone and #nodes > 0 then
+    fit_view()
+    st.initialFitDone = true
+  end
+
   local function history_undo()
     local entry = st.undoStack and table.remove(st.undoStack)
     if not entry then return false end
@@ -767,10 +807,12 @@ function node_editor(graphId, opts)
   elseif st.focused and redoPressed then history_redo()
   elseif st.focused and fitPressed then fit_view() end
 
-  if inside and device and device.scroll and device.scroll.y ~= 0 and not leftDown then
+  local wheelY = tonumber(opts.scrollY)
+  if wheelY == nil then wheelY = device and device.scroll and device.scroll.y or 0 end
+  if inside and wheelY ~= 0 and not leftDown then
     local localX, localY = mx - rootBox.x, my - rootBox.y
     local graphX, graphY = (localX - st.panX) / st.zoom, (localY - st.panY) / st.zoom
-    local factor = device.scroll.y > 0 and (opts.zoomStep or DEFAULTS.zoomStep)
+    local factor = wheelY > 0 and (opts.zoomStep or DEFAULTS.zoomStep)
         or (1 / (opts.zoomStep or DEFAULTS.zoomStep))
     st.zoom = clamp(st.zoom * factor, opts.minZoom or DEFAULTS.minZoom, opts.maxZoom or DEFAULTS.maxZoom)
     st.panX = localX - graphX * st.zoom
@@ -1149,17 +1191,17 @@ function node_editor(graphId, opts)
         (opts.borderColor or theme.colors.nodeEditor.borderColor).b, (opts.borderColor or theme.colors.nodeEditor.borderColor).a)
     :borderWidth(1)
     :clip(true, true)
-    :children(function()
-      clay.element(clay.id("NodeEditorWireLayer:" .. graphKey))
-        :width(clay.SIZING_GROW)
-        :height(clay.SIZING_GROW)
-        :customData({ kind="clay_node_editor_canvas", wires=wires, pending=pending,
-            selectionRect=selectionRect, zoom=st.zoom, panX=st.panX, panY=st.panY,
-            gridSize=gridSize, gridColor=gridColor })
-        :close()
+    :open()
+  clay.element(clay.id("NodeEditorWireLayer:" .. graphKey))
+    :width(clay.SIZING_GROW)
+    :height(clay.SIZING_GROW)
+    :customData({ kind="clay_node_editor_canvas", wires=wires, pending=pending,
+        selectionRect=selectionRect, zoom=st.zoom, panX=st.panX, panY=st.panY,
+        gridSize=gridSize, gridColor=gridColor })
+    :close()
 
-      for i = 1, #nodes do draw_node(graphKey, nodes[i], i, opts, st) end
-    end)
+  for i = 1, #nodes do draw_node(graphKey, nodes[i], i, opts, st) end
+  clay.close() -- node editor canvas
 
   st.api.selectedNode = st.selectedNode
   st.api.selectedNodes = selectedNow
@@ -1172,7 +1214,19 @@ function node_editor(graphId, opts)
   st.api.nodes = nodes
   st.api.canUndo = st.undoStack and #st.undoStack > 0 or false
   st.api.canRedo = st.redoStack and #st.redoStack > 0 or false
+  st.api.focused = st.focused
+  st.api.interacting = st.dragNode ~= nil or st.panDrag ~= nil or st.boxSelect ~= nil or st.connecting ~= nil
+  if clay._trackRetainedKeyboardInput then clay._trackRetainedKeyboardInput(st.focused) end
   return st.api
+end
+
+ComponentBuilder.register("node_editor", function(builder)
+  return render_node_editor(rawget(builder, "_id"), builder)
+end)
+
+function node_editor(graphId, options)
+  if options ~= nil then return render_node_editor(graphId, options) end
+  return ComponentBuilder.new("node_editor", graphId)
 end
 
 return { node_editor = node_editor, node = node }

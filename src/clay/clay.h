@@ -2134,8 +2134,11 @@ void Clay__ConfigureOpenElementPtr(const Clay_ElementDeclaration *declaration) {
             if (declaration->floating.attachTo == CLAY_ATTACH_TO_PARENT) {
                 // Attach to the element's direct hierarchical parent
                 floatingConfig->parentId = hierarchicalParent->id;
-                if (context->openClipElementStack.length > 0) {
-                    clipElementId = Clay__int32_tArray_GetValue(&context->openClipElementStack, (int)context->openClipElementStack.length - 1);
+                int32_t parentIndex = (int32_t)(hierarchicalParent - context->layoutElements.internalArray);
+                if (hierarchicalParent->config.clip.horizontal || hierarchicalParent->config.clip.vertical) {
+                    clipElementId = hierarchicalParent->id;
+                } else {
+                    clipElementId = Clay__int32_tArray_GetValue(&context->layoutElementClipElementIds, parentIndex);
                 }
             } else if (declaration->floating.attachTo == CLAY_ATTACH_TO_ELEMENT_WITH_ID) {
                 Clay_LayoutElementHashMapItem *parentItem = Clay__GetHashMapItem(floatingConfig->parentId);
@@ -2145,7 +2148,13 @@ void Clay__ConfigureOpenElementPtr(const Clay_ElementDeclaration *declaration) {
                             .errorText = CLAY_STRING("A floating element was declared with a parentId, but no element with that ID was found."),
                             .userData = context->errorHandler.userData });
                 } else {
-                    clipElementId = Clay__int32_tArray_GetValue(&context->layoutElementClipElementIds, (int32_t)(parentItem->layoutElement - context->layoutElements.internalArray));
+                    Clay_LayoutElement *parentElement = parentItem->layoutElement;
+                    int32_t parentIndex = (int32_t)(parentElement - context->layoutElements.internalArray);
+                    if (parentElement->config.clip.horizontal || parentElement->config.clip.vertical) {
+                        clipElementId = parentElement->id;
+                    } else {
+                        clipElementId = Clay__int32_tArray_GetValue(&context->layoutElementClipElementIds, parentIndex);
+                    }
                 }
             } else if (declaration->floating.attachTo == CLAY_ATTACH_TO_ROOT) {
                 floatingConfig->parentId = Clay__HashString(CLAY_STRING("Clay__RootContainer"), 0).id;

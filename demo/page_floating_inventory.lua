@@ -44,19 +44,19 @@ local function InventoryItem(i, label, mouse_down)
     :backgroundColor(C(hovered and theme.colors.surfaceHover or theme.colors.surfaceRaised))
     :borderColor(255, 255, 255, 20)
     :borderWidth(0, 1, 0, 1) -- l,t,r,b
-    :children(function()
-      clay.text(label)
-        :fontId(1):fontSize(16)
-        :textColor(C(COLOR_WHITE))
-        :done()
+    :open()
+  clay.text(label)
+    :fontId(1):fontSize(16)
+    :textColor(C(COLOR_WHITE))
+    :done()
 
-      if hovered and mouse_down and not draggingItem then
-        dragStartX, dragStartY = window.mousePosition()
-        draggingItem = label
-        dragSource = "inventory"
-        dragStarted = false
-      end
-    end)
+  if hovered and mouse_down and not draggingItem then
+    dragStartX, dragStartY = window.mousePosition()
+    draggingItem = label
+    dragSource = "inventory"
+    dragStarted = false
+  end
+  clay.close()
 end
 
 -------------------------------------------------
@@ -74,39 +74,39 @@ local function EquipmentSlot(i, name, key, mouse_down)
     :backgroundColor(C(hovered and theme.colors.surfaceHover or theme.colors.surface))
     :borderColor(200, 200, 255, 60)
     :borderWidth(1)
-    :children(function()
-      clay.text(name .. ": " .. (item or "[empty]"))
-        :fontId(1):fontSize(14)
-        :textColor(C(COLOR_WHITE))
-        :done()
+    :open()
+  clay.text(name .. ": " .. (item or "[empty]"))
+    :fontId(1):fontSize(14)
+    :textColor(C(COLOR_WHITE))
+    :done()
 
-      -- start drag from slot
-      if hovered and mouse_down and not draggingItem and item then
-        dragStartX, dragStartY = window.mousePosition()
-        draggingItem = item
-        dragSource = "slot:" .. key
-        dragStarted = false
-      end
+  -- start drag from slot
+  if hovered and mouse_down and not draggingItem and item then
+    dragStartX, dragStartY = window.mousePosition()
+    draggingItem = item
+    dragSource = "slot:" .. key
+    dragStarted = false
+  end
 
-      -- drop from inventory onto slot
-      if hovered and not mouse_down and draggingItem and dragStarted then
-        if dragSource == "inventory" then
-          for j = #inventoryItems, 1, -1 do
-            if inventoryItems[j] == draggingItem then
-              table.remove(inventoryItems, j)
-              break
-            end
-          end
-        elseif dragSource and dragSource:match("^slot:") then
-          local oldKey = dragSource:match("slot:(.+)")
-          equipped[oldKey] = nil
+  -- drop from inventory onto slot
+  if hovered and not mouse_down and draggingItem and dragStarted then
+    if dragSource == "inventory" then
+      for j = #inventoryItems, 1, -1 do
+        if inventoryItems[j] == draggingItem then
+          table.remove(inventoryItems, j)
+          break
         end
-
-        equipped[key] = draggingItem
-        draggingItem = nil
-        dragStarted = false
       end
-    end)
+    elseif dragSource and dragSource:match("^slot:") then
+      local oldKey = dragSource:match("slot:(.+)")
+      equipped[oldKey] = nil
+    end
+
+    equipped[key] = draggingItem
+    draggingItem = nil
+    dragStarted = false
+  end
+  clay.close()
 end
 
 function layout(dt)
@@ -127,57 +127,56 @@ function layout(dt)
     :width(clay.SIZING_GROW)
     :height(clay.SIZING_GROW)
     :childGap(12)
-    :children(function()
+    :open()
 
-      -- Left inventory
-      clay.element("InventoryScroll")
-        :width(clay.SIZING_FIXED, 240)
-        :height(clay.SIZING_GROW)
-        :layoutDirection(clay.TOP_TO_BOTTOM)
-        :padding(8)
-        :childGap(8)
-        :clip(false, true) -- vertical scroll; childOffset defaults to Clay_GetScrollOffset() if omitted
-        :backgroundColor(C(theme.colors.surface))
-        :borderColor(C(COLOR_WHITE_24))
-        :borderWidth(0, 0, 1, 0) -- right border only
-        :children(function()
-          for i, item in ipairs(inventoryItems) do
-            InventoryItem(i, item, mouse_down)
-          end
+  -- Left inventory
+  clay.element("InventoryScroll")
+    :width(clay.SIZING_FIXED, 240)
+    :height(clay.SIZING_GROW)
+    :layoutDirection(clay.TOP_TO_BOTTOM)
+    :padding(8)
+    :childGap(8)
+    :clip(false, true) -- vertical scroll; childOffset defaults to Clay_GetScrollOffset() if omitted
+    :backgroundColor(C(theme.colors.surface))
+    :borderColor(C(COLOR_WHITE_24))
+    :borderWidth(0, 0, 1, 0) -- right border only
+    :open()
+  for i, item in ipairs(inventoryItems) do
+    InventoryItem(i, item, mouse_down)
+  end
 
-          -- drop from slot back to inventory
-          if clay.hovered() and not mouse_down and draggingItem and dragStarted then
-            if dragSource and dragSource:match("^slot:") then
-              local oldKey = dragSource:match("slot:(.+)")
-              equipped[oldKey] = nil
-              table.insert(inventoryItems, draggingItem)
-            end
-            draggingItem = nil
-            dragStarted = false
-          end
-        end)
+  -- drop from slot back to inventory
+  if clay.hovered() and not mouse_down and draggingItem and dragStarted then
+    if dragSource and dragSource:match("^slot:") then
+      local oldKey = dragSource:match("slot:(.+)")
+      equipped[oldKey] = nil
+      table.insert(inventoryItems, draggingItem)
+    end
+    draggingItem = nil
+    dragStarted = false
+  end
+  clay.close() -- InventoryScroll
 
-      -- Right paper doll
-      clay.element("EquipPanel")
-        :layoutDirection(clay.TOP_TO_BOTTOM)
-        :width(clay.SIZING_GROW)
-        :height(clay.SIZING_GROW)
-        :childGap(12)
-        :padding(16)
-        :backgroundColor(C(theme.colors.surfaceRaised))
-        :children(function()
-          clay.text("Paper Doll (mock)")
-            :fontId(1):fontSize(18)
-            :textColor(C(COLOR_WHITE))
-            :done()
-
-          EquipmentSlot(1, "Head", "head", mouse_down)
-          EquipmentSlot(2, "Chest", "chest", mouse_down)
-          EquipmentSlot(3, "Legs", "legs", mouse_down)
-          EquipmentSlot(4, "Left Hand", "leftHand", mouse_down)
-          EquipmentSlot(5, "Right Hand", "rightHand", mouse_down)
-        end)
-    end)
+  -- Right paper doll
+  clay.element("EquipPanel")
+    :layoutDirection(clay.TOP_TO_BOTTOM)
+    :width(clay.SIZING_GROW)
+    :height(clay.SIZING_GROW)
+    :childGap(12)
+    :padding(16)
+    :backgroundColor(C(theme.colors.surfaceRaised))
+    :open()
+  clay.text("Paper Doll (mock)")
+    :fontId(1):fontSize(18)
+    :textColor(C(COLOR_WHITE))
+    :done()
+  EquipmentSlot(1, "Head", "head", mouse_down)
+  EquipmentSlot(2, "Chest", "chest", mouse_down)
+  EquipmentSlot(3, "Legs", "legs", mouse_down)
+  EquipmentSlot(4, "Left Hand", "leftHand", mouse_down)
+  EquipmentSlot(5, "Right Hand", "rightHand", mouse_down)
+  clay.close() -- EquipPanel
+  clay.close() -- InventoryRoot
 
   -- floating ghost follows mouse while dragging
   if draggingItem and dragStarted then
@@ -196,12 +195,12 @@ function layout(dt)
       :backgroundColor(C(theme.colors.borderSubtle))
       :borderColor(C(COLOR_WHITE_45))
       :borderWidth(1)
-      :children(function()
-        clay.text(draggingItem)
-          :fontId(1):fontSize(14)
-          :textColor(C(COLOR_WHITE))
-          :done()
-      end)
+      :open()
+    clay.text(draggingItem)
+      :fontId(1):fontSize(14)
+      :textColor(C(COLOR_WHITE))
+      :done()
+    clay.close()
   end
 
   -- mouse release cleanup

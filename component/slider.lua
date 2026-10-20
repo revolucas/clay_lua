@@ -1,6 +1,7 @@
--- component/slider.lua (new builder API + no per-call default table churn)
+-- component/slider.lua (fluent builder API)
 local window = require("window")
 local theme = require("theme")
+local ComponentBuilder = require("component.builder")
 
 local _slider_state = _slider_state or {} -- [id] -> { active, focused, lastDown }
 local _slider_keys  = _slider_keys  or {} -- key edge table
@@ -35,7 +36,7 @@ local function key_edge(win, key, keyTable)
   return (cur and not last), cur
 end
 
-function slider(elid, value, opts)
+local function render_slider(elid, value, opts)
   local def = SLIDER_DEFAULT
   local dcol = theme.colors.slider
   local col = opts and opts.colors
@@ -188,43 +189,52 @@ function slider(elid, value, opts)
     :backgroundColor(C(bgCol))
     :borderColor(C(c_bgborder))
     :borderWidth(1)
-    :children(function()
-      clay.element(railId)
-        :layoutDirection(clay.LEFT_TO_RIGHT)
-        :childAlignment(clay.ALIGN_X_LEFT, clay.ALIGN_Y_CENTER)
-        :width(clay.SIZING_FIXED, innerW)
-        :height(clay.SIZING_FIXED, innerH)
-        :childGap(0)
-        :children(function()
-          clay.element(trkId)
-            :width(clay.SIZING_FIXED, innerW)
-            :height(clay.SIZING_FIXED, trackThickness)
-            :backgroundColor(C(trackCol))
-            :children(function()
-              clay.element(fillId)
-                :layoutDirection(clay.LEFT_TO_RIGHT)
-                :childAlignment(clay.ALIGN_X_LEFT, clay.ALIGN_Y_CENTER)
-                :width(clay.SIZING_FIXED, fillW)
-                :height(clay.SIZING_FIXED, trackThickness)
-                :backgroundColor(C(fillCol))
-                :children(function()
-                  clay.element(spLId)
-                    :width(clay.SIZING_FIXED, padThumb)
-                    :height(clay.SIZING_FIXED, trackThickness)
-                    :close()
+    :open()
+  clay.element(railId)
+    :layoutDirection(clay.LEFT_TO_RIGHT)
+    :childAlignment(clay.ALIGN_X_LEFT, clay.ALIGN_Y_CENTER)
+    :width(clay.SIZING_FIXED, innerW)
+    :height(clay.SIZING_FIXED, innerH)
+    :childGap(0)
+    :open()
+  clay.element(trkId)
+    :width(clay.SIZING_FIXED, innerW)
+    :height(clay.SIZING_FIXED, trackThickness)
+    :backgroundColor(C(trackCol))
+    :open()
+  clay.element(fillId)
+    :layoutDirection(clay.LEFT_TO_RIGHT)
+    :childAlignment(clay.ALIGN_X_LEFT, clay.ALIGN_Y_CENTER)
+    :width(clay.SIZING_FIXED, fillW)
+    :height(clay.SIZING_FIXED, trackThickness)
+    :backgroundColor(C(fillCol))
+    :open()
+  clay.element(spLId)
+    :width(clay.SIZING_FIXED, padThumb)
+    :height(clay.SIZING_FIXED, trackThickness)
+    :close()
 
-                  clay.element(thumbId)
-                    :width(clay.SIZING_FIXED, thumbThickness)
-                    :height(clay.SIZING_FIXED, thumbThickness)
-                    :backgroundColor(C(thumbCol))
-                    :borderColor(C(c_border))
-                    :borderWidth(1)
-                    :cornerRadius(thumbCornerRad, thumbCornerRad, thumbCornerRad, thumbCornerRad)
-                    :close()
-                end)
-            end)
-        end)
-    end)
+  clay.element(thumbId)
+    :width(clay.SIZING_FIXED, thumbThickness)
+    :height(clay.SIZING_FIXED, thumbThickness)
+    :backgroundColor(C(thumbCol))
+    :borderColor(C(c_border))
+    :borderWidth(1)
+    :cornerRadius(thumbCornerRad, thumbCornerRad, thumbCornerRad, thumbCornerRad)
+    :close()
+  clay.close() -- slider fill
+  clay.close() -- slider track
+  clay.close() -- slider rail
+  clay.close() -- slider root
 
+  if clay._trackRetainedKeyboardInput then clay._trackRetainedKeyboardInput(st.focused) end
   return value, changed, active
+end
+
+ComponentBuilder.register("slider", function(builder)
+  return render_slider(rawget(builder, "_id"), rawget(builder, "_arg1"), builder)
+end)
+
+function slider(elid, value)
+  return ComponentBuilder.new("slider", elid, value)
 end

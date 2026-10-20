@@ -1,6 +1,7 @@
 -- component/resizer.lua (new builder API + no per-call default table churn)
 local window = require("window")
 local theme = require("theme")
+local ComponentBuilder = require("component.builder")
 
 local _resz_state = _resz_state or {} -- keyed by parent id
 
@@ -29,16 +30,9 @@ local function snap(v, s)
   return math.floor(v / s + 0.5) * s
 end
 
--- resizable(parent_id, width, height, opts) -> newW, newH, changed, active
--- opts = {
---   minW=64, minH=32, maxW=nil, maxH=nil,
---   grip=16, inset=2, zIndex=10000,
---   snapW=0, snapH=0,
---   showGrip=false,
---   gripColor={r=255,g=255,b=255,a=48},
---   gripGlyph="◢", glyphScale=0.9, glyphColor=..., glyphFontId=0,
--- }
-function resizable(parent_id, width, height, opts)
+-- clay.resizable(parentId, width, height):minW(64):minH(32):showGrip(true):draw()
+-- Returns new width, new height, changed, and active.
+local function render_resizable(parent_id, width, height, opts)
   local def = RESIZE_DEFAULT
 
   local minW = (opts and opts.minW) or def.minW
@@ -81,16 +75,16 @@ function resizable(parent_id, width, height, opts)
     :height(clay.SIZING_FIXED, grip)
     :childAlignment(clay.ALIGN_X_RIGHT, clay.ALIGN_Y_CENTER)
     :backgroundColor(C(showGrip and gripColor or theme.colors.transparent))
-    :children(function()
-      if showGrip then
-        local fs = math.max(8, math.floor(grip * glyphScale))
-        clay.text(glyph)
-          :fontId(glyphFontId)
-          :fontSize(fs)
-          :textColor(C(glyphColor))
-          :done()
-      end
-    end)
+    :open()
+  if showGrip then
+    local fs = math.max(8, math.floor(grip * glyphScale))
+    clay.text(glyph)
+      :fontId(glyphFontId)
+      :fontSize(fs)
+      :textColor(C(glyphColor))
+      :done()
+  end
+  clay.close()
 
   -- mouse input
   local mx, my = window.mousePosition()
@@ -133,3 +127,14 @@ function resizable(parent_id, width, height, opts)
   st.lastDown = down
   return width, height, changed, st.active
 end
+
+ComponentBuilder.register("resizable", function(builder)
+  return render_resizable(rawget(builder, "_id"), rawget(builder, "_arg1"),
+    rawget(builder, "_arg2"), builder)
+end)
+
+function resizable(parent_id, width, height)
+  return ComponentBuilder.new("resizable", parent_id, width, height)
+end
+
+return { resizable = resizable }

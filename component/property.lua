@@ -1,6 +1,7 @@
 -- component/property.lua (new builder API, no per-call default table churn)
 local window = require("window")
 local theme = require("theme")
+local ComponentBuilder = require("component.builder")
 
 local _prop_state = _prop_state or {} -- [id] -> { active=false, focused=false, lastDown=false, repeatT=0, dragStartX=0, dragStartV=0 }
 local _prop_keys  = _prop_keys  or {} -- key edge table
@@ -34,13 +35,9 @@ local function key_edge(win, key, keyTable)
   return (cur and not last), cur
 end
 
--- property(elid, label, value, opts) -> newValue, changed, focused
--- opts:
--- { min, max, step, pageStep, width, height, pad, buttonW, cornerRadius,
---   format=function(v)->string OR format="%.2f",
---   fontId, fontSize, arrowFontId, arrowSize,
---   colors={ bg,bgHov,bgAct,text,btn,btnHov,btnAct } }
-function property(elid, label, value, opts)
+-- property(id, label, value): configure fluently, then :draw() for
+-- newValue, changed, focused.
+local function render_property(elid, label, value, opts)
   local def = PROP_DEFAULT
   local componentDefaults = theme.defaults.property
   local dcol = theme.colors.property
@@ -114,72 +111,69 @@ function property(elid, label, value, opts)
     :childGap(0)
     :backgroundColor(C(c_bg))
     :cornerRadius(radius, radius, radius, radius)
-    :children(function()
-      -- LEFT
-      local hovL = clay.pointerOver(leftId)
-      local colL = (down and hovL) and c_btnAct or (hovL and c_btnHov or c_btn)
+    :open()
 
-      clay.element(leftId)
-        :width(clay.SIZING_FIXED, buttonW)
-        :height(clay.SIZING_FIXED, height)
-        :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
-        :backgroundColor(C(colL))
-        :cornerRadius(radius, 0, radius, 0)
-        :children(function()
-          clay.text("◂")
-            :fontId(arrowFontId)
-            :fontSize(arrowSize)
-            :textColor(C(c_text))
-            :done()
-        end)
+  -- LEFT
+  local hovL = clay.pointerOver(leftId)
+  local colL = (down and hovL) and c_btnAct or (hovL and c_btnHov or c_btn)
+  clay.element(leftId)
+    :width(clay.SIZING_FIXED, buttonW)
+    :height(clay.SIZING_FIXED, height)
+    :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
+    :backgroundColor(C(colL))
+    :cornerRadius(radius, 0, radius, 0)
+    :open()
+  clay.text("◂")
+    :fontId(arrowFontId)
+    :fontSize(arrowSize)
+    :textColor(C(c_text))
+    :done()
+  clay.close()
 
-      -- CENTER
-      local hovC = clay.pointerOver(centerId)
-      local bgC  = st.active and c_bgAct or (hovC and c_bgHov or c_bg)
+  -- CENTER
+  local hovC = clay.pointerOver(centerId)
+  local bgC  = st.active and c_bgAct or (hovC and c_bgHov or c_bg)
+  clay.element(centerId)
+    :layoutDirection(clay.TOP_TO_BOTTOM)
+    :width(clay.SIZING_GROW)
+    :height(clay.SIZING_FIXED, height)
+    :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
+    :padding(pad, 0, pad, 0) -- horizontal only
+    :backgroundColor(C(bgC))
+    :open()
+  local text
+  if type(opts and opts.format) == "function" then
+    text = (opts.format)(value)
+  elseif type(opts and opts.format) == "string" then
+    local ok, s = pcall(string.format, opts.format, value)
+    text = ok and s or tostring(value)
+  else
+    text = string.format("%s: %s", label or "Property", tostring(value))
+  end
+  clay.text(text)
+    :fontId(fontId)
+    :fontSize(fontSize)
+    :textColor(C(c_text))
+    :done()
+  clay.close()
 
-      clay.element(centerId)
-        :layoutDirection(clay.TOP_TO_BOTTOM)
-        :width(clay.SIZING_GROW)
-        :height(clay.SIZING_FIXED, height)
-        :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
-        :padding(pad, 0, pad, 0) -- horizontal only
-        :backgroundColor(C(bgC))
-        :children(function()
-          local text
-          if type(opts and opts.format) == "function" then
-            text = (opts.format)(value)
-          elseif type(opts and opts.format) == "string" then
-            local ok, s = pcall(string.format, opts.format, value)
-            text = ok and s or tostring(value)
-          else
-            text = string.format("%s: %s", label or "Property", tostring(value))
-          end
-
-          clay.text(text)
-            :fontId(fontId)
-            :fontSize(fontSize)
-            :textColor(C(c_text))
-            :done()
-        end)
-
-      -- RIGHT
-      local hovR = clay.pointerOver(rightId)
-      local colR = (down and hovR) and c_btnAct or (hovR and c_btnHov or c_btn)
-
-      clay.element(rightId)
-        :width(clay.SIZING_FIXED, buttonW)
-        :height(clay.SIZING_FIXED, height)
-        :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
-        :backgroundColor(C(colR))
-        :cornerRadius(0, radius, 0, radius)
-        :children(function()
-          clay.text("▸")
-            :fontId(arrowFontId)
-            :fontSize(arrowSize)
-            :textColor(C(c_text))
-            :done()
-        end)
-    end)
+  -- RIGHT
+  local hovR = clay.pointerOver(rightId)
+  local colR = (down and hovR) and c_btnAct or (hovR and c_btnHov or c_btn)
+  clay.element(rightId)
+    :width(clay.SIZING_FIXED, buttonW)
+    :height(clay.SIZING_FIXED, height)
+    :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
+    :backgroundColor(C(colR))
+    :cornerRadius(0, radius, 0, radius)
+    :open()
+  clay.text("▸")
+    :fontId(arrowFontId)
+    :fontSize(arrowSize)
+    :textColor(C(c_text))
+    :done()
+  clay.close()
+  clay.close() -- property control
 
   local hoveredRoot = clay.pointerOver(elid)
   local hovL = clay.pointerOver(leftId)
@@ -297,5 +291,15 @@ function property(elid, label, value, opts)
   value = clamp(value, minv, maxv)
   if step > 0 then value = snap_step(value, step) end
 
+  if clay._trackRetainedKeyboardInput then clay._trackRetainedKeyboardInput(st.focused) end
   return value, changed, st.focused
+end
+
+ComponentBuilder.register("property", function(builder)
+  return render_property(rawget(builder, "_id"), rawget(builder, "_arg1"),
+    rawget(builder, "_arg2"), builder)
+end)
+
+function property(elid, label, value)
+  return ComponentBuilder.new("property", elid, label, value)
 end

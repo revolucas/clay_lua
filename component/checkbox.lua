@@ -1,5 +1,6 @@
 local window = require("window")
 local theme = require("theme")
+local ComponentBuilder = require("component.builder")
 
 _cb_state = _cb_state or {}
 
@@ -7,9 +8,9 @@ local function C(c) return c.r, c.g, c.b, c.a end
 local TRANSPARENT = { r=0, g=0, b=0, a=0 }
 
 -- Default colors
--- checkbox(elid, label, defaultChecked, opts)
--- opts.transitionDuration controls the indicator and hover color easing (0 disables it).
-function checkbox(elid, label, defaultChecked, opts)
+-- checkbox(id, label, defaultChecked): configure fluently, then call :draw().
+-- :transition(duration) controls indicator easing; use 0 to disable it.
+local function render_checkbox(elid, label, defaultChecked, opts)
   -- input (read once here)
   local mx, my = window.mousePosition()
   local down = window.mouseButtonDown(window.MOUSE_BUTTON_LEFT)
@@ -79,42 +80,52 @@ function checkbox(elid, label, defaultChecked, opts)
     :width(clay.SIZING_FIT)
     :height(clay.SIZING_FIXED, size)
     :childGap(gap)
-    :children(function()
+    :open()
 
-      -- box
-      local boxBuilder = clay.element(boxId)
-        :width(clay.SIZING_FIXED, size)
-        :height(clay.SIZING_FIXED, size)
-        :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
-        :backgroundColor(C(boxCol))
-        :borderColor(C(c_border))
-        :borderWidth(1)
-      if transitionDuration > 0 then
-        boxBuilder:transition(transitionDuration, "backgroundColor")
-      end
-      boxBuilder:children(function()
-        -- Keep the indicator in the tree while unchecked so its color can
-        -- transition smoothly in both directions.
-        local fillBuilder = clay.element(fillId)
-          :width(clay.SIZING_FIXED, fillSize)
-          :height(clay.SIZING_FIXED, fillSize)
-          :backgroundColor(C(indicatorColor))
-          :borderColor(C(indicatorBorder))
-          :borderWidth(1)
-        if transitionDuration > 0 then
-          fillBuilder:transition(transitionDuration, "backgroundColor", "borderColor")
-        end
-        fillBuilder:close()
-      end)
+  -- box
+  local boxBuilder = clay.element(boxId)
+    :width(clay.SIZING_FIXED, size)
+    :height(clay.SIZING_FIXED, size)
+    :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
+    :backgroundColor(C(boxCol))
+    :borderColor(C(c_border))
+    :borderWidth(1)
+  if transitionDuration > 0 then
+    boxBuilder:transition(transitionDuration, "backgroundColor")
+  end
+  boxBuilder:open()
 
-      if label ~= nil then
-        clay.text(label)
-          :fontId(fontId)
-          :fontSize(fontSize)
-          :textColor(C(c_label))
-          :done()
-      end
-    end)
+  -- Keep the indicator in the tree while unchecked so its color can
+  -- transition smoothly in both directions.
+  local fillBuilder = clay.element(fillId)
+    :width(clay.SIZING_FIXED, fillSize)
+    :height(clay.SIZING_FIXED, fillSize)
+    :backgroundColor(C(indicatorColor))
+    :borderColor(C(indicatorBorder))
+    :borderWidth(1)
+  if transitionDuration > 0 then
+    fillBuilder:transition(transitionDuration, "backgroundColor", "borderColor")
+  end
+  fillBuilder:close()
+  clay.close() -- checkbox box
+
+  if label ~= nil then
+    clay.text(label)
+      :fontId(fontId)
+      :fontSize(fontSize)
+      :textColor(C(c_label))
+      :done()
+  end
+  clay.close() -- checkbox row
 
   return st.value, toggled
+end
+
+ComponentBuilder.register("checkbox", function(builder)
+  return render_checkbox(rawget(builder, "_id"), rawget(builder, "_arg1"),
+    rawget(builder, "_arg2"), builder)
+end)
+
+function checkbox(elid, label, defaultChecked)
+  return ComponentBuilder.new("checkbox", elid, label, defaultChecked)
 end

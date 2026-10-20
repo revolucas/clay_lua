@@ -3,6 +3,13 @@ local ffi = require("ffi")
 local M = {}
 
 function M.tryload(name)
+    -- Emscripten links the browser runtime's native helpers into the main
+    -- module. luaffifb exposes that module through ffi.C; there is no native
+    -- shared-library filesystem to search in a browser.
+    if ffi.arch == "wasm" then
+        return ffi.C
+    end
+
     local tried = {}
     local ok, library = pcall(ffi.load, name)
     if ok then

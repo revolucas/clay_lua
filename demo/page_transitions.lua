@@ -19,8 +19,6 @@ local resourceRows = {
 local cardExpanded = false
 local cardWasDown = false
 local cardPressed = false
-local indicatorTransitionOptions = { transitionDuration=0.32 }
-
 local function C(c) return c.r, c.g, c.b, c.a end
 
 function layout()
@@ -59,16 +57,16 @@ function layout()
     :borderColor(255, 255, 255, 56)
     :borderWidth(1)
     :transition(0.24, "width", "height", "backgroundColor")
-    :children(function()
-      clay.text(cardExpanded and "Expanded state" or "Compact state")
-        :fontId(1):fontSize(17)
-        :textColor(C(COLOR_WHITE))
-        :done()
-      clay.text("Click to animate size and color.")
-        :fontId(1):fontSize(14)
-        :textColor(C(theme.colors.textMuted))
-        :done()
-    end)
+    :open()
+  clay.text(cardExpanded and "Expanded state" or "Compact state")
+    :fontId(1):fontSize(17)
+    :textColor(C(COLOR_WHITE))
+    :done()
+  clay.text("Click to animate size and color.")
+    :fontId(1):fontSize(14)
+    :textColor(C(theme.colors.textMuted))
+    :done()
+  clay.close()
   cardWasDown = down
 
   clay.text("Checkbox and radio: eased indicator states")
@@ -81,36 +79,25 @@ function layout()
     :textColor(C(theme.colors.textMuted))
     :done()
 
-  clay.checkbox(
-    clay.id("TransitionCheckbox"),
-    "Enable the example",
-    false,
-    indicatorTransitionOptions
-  )
+  clay.checkbox(clay.id("TransitionCheckbox"), "Enable the example", false)
+    :transition(0.32)
+    :draw()
 
   clay.element(clay.id("TransitionRadioRow"))
     :row()
     :width(clay.SIZING_FIT)
     :height(clay.SIZING_FIT)
     :childGap(18)
-    :children(function()
-      clay.radio(
-        clay.id("TransitionRadioGentle"),
-        "Gentle",
-        "TransitionRadioGroup",
-        "gentle",
-        true,
-        indicatorTransitionOptions
-      )
-      clay.radio(
-        clay.id("TransitionRadioBold"),
-        "Bold",
-        "TransitionRadioGroup",
-        "bold",
-        false,
-        indicatorTransitionOptions
-      )
-    end)
+    :open()
+  clay.radio(clay.id("TransitionRadioGentle"), "Gentle",
+    "TransitionRadioGroup", "gentle", true)
+    :transition(0.32)
+    :draw()
+  clay.radio(clay.id("TransitionRadioBold"), "Bold",
+    "TransitionRadioGroup", "bold", false)
+    :transition(0.32)
+    :draw()
+  clay.close()
 
   clay.text("Dropdown: animated popup height and hover/selection colors")
     :fontId(1):fontSize(17)
@@ -119,11 +106,10 @@ function layout()
 
   local changed = false
   selectedRenderer, changed = clay.dropdown(
-    clay.id("TransitionRendererDropdown"),
-    renderers,
-    selectedRenderer,
-    { width=270, transitionDuration=0.18 }
-  )
+    clay.id("TransitionRendererDropdown"), renderers, selectedRenderer)
+    :width(270)
+    :transition(0.18)
+    :draw()
 
   clay.text("Selected renderer: " .. tostring(selectedRenderer) .. (changed and " (changed)" or ""))
     :fontId(1):fontSize(14)
@@ -135,13 +121,12 @@ function layout()
     :textColor(C(COLOR_WHITE))
     :done()
 
-  local selectedResource = clay.listview(clay.id("TransitionResourceList"), {
-    items = resourceRows,
-    rowHeight = 30,
-    zebra = false,
-    transitionDuration = 0.16,
-    colors = theme.colors.listview,
-  })
+  local selectedResource = clay.listview(clay.id("TransitionResourceList"), resourceRows)
+    :rowHeight(30)
+    :zebra(false)
+    :transition(0.16)
+    :colors(theme.colors.listview)
+    :draw()
 
   clay.text("Selected resource: " .. tostring(selectedResource or "none"))
     :fontId(1):fontSize(14)

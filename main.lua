@@ -30,6 +30,7 @@ clay = require("clay") -- global make project-wide
 theme = require("theme") -- global reusable color/spacing/type tokens
 clay.theme = theme -- native :style(alias) scopes resolve through this table
 theme.syncGlobals()
+local retained_runtime = require("clay_retained")
 bgfx = require("ffi.ffi_bgfx") -- global make project-wide
 local shader_manager = require("shader_manager")
 
@@ -41,6 +42,110 @@ local window = require("window")
 local font_manager = require("font_manager")
 
 require("ffi.ffi_math")
+
+local uniformScratch = ffi.new("float[4]")
+local function setUniform4(uniform, x, y, z, w)
+	uniformScratch[0], uniformScratch[1], uniformScratch[2], uniformScratch[3] = x, y, z, w
+	bgfx.bgfx_set_uniform(uniform, uniformScratch, 1)
+end
+
+local retainedRenderGeometry = setmetatable({}, { __mode = "k" })
+local function retainedGeometry(packet, slot, create)
+	if not packet then return create() end
+	local packetCache = retainedRenderGeometry[packet]
+	if not packetCache then
+		packetCache = {}
+		retainedRenderGeometry[packet] = packetCache
+	end
+	local data = packetCache[slot]
+	if not data then
+		data = create()
+		packetCache[slot] = data
+	end
+	return data
+end
+
+local transientVertexScratch = ffi.new("bgfx_transient_vertex_buffer_t[1]")
+local transientIndexScratch = ffi.new("bgfx_transient_index_buffer_t[1]")
+
+local function validBuffer(handle)
+	return handle ~= nil and handle.idx ~= 0xffff
+end
+
+local function bindGeometry(packet, geometry)
+	local vertexCount, indexCount = geometry.vertCount or 0, geometry.idxCount or 0
+	if vertexCount <= 0 or indexCount <= 0 then return false end
+
+	if packet then
+		if not validBuffer(geometry.vertexBuffer) or not validBuffer(geometry.indexBuffer) then
+			if validBuffer(geometry.vertexBuffer) then bgfx.bgfx_destroy_vertex_buffer(geometry.vertexBuffer) end
+			if validBuffer(geometry.indexBuffer) then bgfx.bgfx_destroy_index_buffer(geometry.indexBuffer) end
+			geometry.vertexBuffer, geometry.indexBuffer = nil, nil
+
+			local vertexMemory = bgfx.bgfx_copy(geometry.vertices, ffi.sizeof("Vertex") * vertexCount)
+			if vertexMemory == nil or vertexMemory == ffi.NULL then return false end
+			geometry.vertexBuffer = bgfx.bgfx_create_vertex_buffer(vertexMemory, device.vdecl, bgfx.BGFX_BUFFER_NONE)
+			if not validBuffer(geometry.vertexBuffer) then
+				geometry.vertexBuffer = nil
+				return false
+			end
+
+			local indexMemory = bgfx.bgfx_copy(geometry.indices, ffi.sizeof("uint16_t") * indexCount)
+			if indexMemory == nil or indexMemory == ffi.NULL then
+				bgfx.bgfx_destroy_vertex_buffer(geometry.vertexBuffer)
+				geometry.vertexBuffer = nil
+				return false
+			end
+			geometry.indexBuffer = bgfx.bgfx_create_index_buffer(indexMemory, bgfx.BGFX_BUFFER_NONE)
+			if not validBuffer(geometry.vertexBuffer) or not validBuffer(geometry.indexBuffer) then
+				bgfx.bgfx_destroy_vertex_buffer(geometry.vertexBuffer)
+				if validBuffer(geometry.indexBuffer) then bgfx.bgfx_destroy_index_buffer(geometry.indexBuffer) end
+				geometry.vertexBuffer, geometry.indexBuffer = nil, nil
+				return false
+			end
+		end
+		bgfx.bgfx_set_vertex_buffer(0, geometry.vertexBuffer, 0, vertexCount)
+		bgfx.bgfx_set_index_buffer(geometry.indexBuffer, 0, indexCount)
+		return true
+	end
+
+	if bgfx.bgfx_get_avail_transient_vertex_buffer(vertexCount, device.vdecl) < vertexCount
+		or bgfx.bgfx_get_avail_transient_index_buffer(indexCount, true) < indexCount then
+		return false
+	end
+	bgfx.bgfx_alloc_transient_vertex_buffer(transientVertexScratch, vertexCount, device.vdecl)
+	bgfx.bgfx_alloc_transient_index_buffer(transientIndexScratch, indexCount, false)
+	ffi.copy(transientVertexScratch[0].data, geometry.vertices, ffi.sizeof("Vertex") * vertexCount)
+	ffi.copy(transientIndexScratch[0].data, geometry.indices, ffi.sizeof("uint16_t") * indexCount)
+	bgfx.bgfx_set_transient_vertex_buffer(0, transientVertexScratch, 0, vertexCount)
+	bgfx.bgfx_set_transient_index_buffer(transientIndexScratch, 0, indexCount)
+	return true
+end
+
+local function releaseRetainedPackets(packets)
+	if not packets then return end
+	for i = 1, #packets do
+		local packet = packets[i]
+		local cache = retainedRenderGeometry[packet]
+		if cache then
+			for _, geometry in pairs(cache) do
+				if geometry.font then
+					font_manager.release(geometry.font)
+				end
+				local batches = geometry.batches
+				if batches then
+					for _, batch in ipairs(batches) do
+						if validBuffer(batch.vertexBuffer) then bgfx.bgfx_destroy_vertex_buffer(batch.vertexBuffer) end
+						if validBuffer(batch.indexBuffer) then bgfx.bgfx_destroy_index_buffer(batch.indexBuffer) end
+					end
+				end
+				if validBuffer(geometry.vertexBuffer) then bgfx.bgfx_destroy_vertex_buffer(geometry.vertexBuffer) end
+				if validBuffer(geometry.indexBuffer) then bgfx.bgfx_destroy_index_buffer(geometry.indexBuffer) end
+			end
+			retainedRenderGeometry[packet] = nil
+		end
+	end
+end
 
 ffi.cdef [[
 	typedef struct {
@@ -301,11 +406,9 @@ local function initialize()
 			error("Failed to initialize Clay")
 		end
 
-		if clay.setMeasureTextFastFunction and font_manager.measureTextFast then
-			clay.setMeasureTextFastFunction(font_manager.measureTextFast)
-		else
-			clay.setMeasureTextFunction(font_manager.measureText)
-		end
+		clay.setMeasureTextFunction(font_manager.measureText)
+		retained_runtime.install(clay, device.width, device.height)
+		clay._releaseRetainedPackets = releaseRetainedPackets
 	end
 
 	print("compiling and binding shaders")
@@ -370,6 +473,14 @@ local function initialize()
 		end
 	)
 
+	local function wakeRetainedKeyboardWidgets()
+		if clay and clay._invalidateRetainedKeyboardInput then
+			clay._invalidateRetainedKeyboardInput()
+		end
+	end
+	window.callback_register("window_set_key", wakeRetainedKeyboardWidgets)
+	window.callback_register("window_set_char", wakeRetainedKeyboardWidgets)
+
 	window.callback_register(
 		"window_framebuffer_size",
 		function(w, h)
@@ -408,9 +519,12 @@ local function initialize()
 		clay.resizable = loadScript("component/resizable.lua").resizable
 		clay.color_picker = loadScript("component/color_picker.lua").color_picker
 		clay.dropdown = loadScript("component/dropdown.lua").dropdown
+		clay.inspector = loadScript("component/inspector.lua").inspector
+		clay.asset_browser = loadScript("component/asset_browser.lua").asset_browser
 		
 		local M = loadScript("component/listview.lua")
 		clay.listview = M.listview
+		clay.treeview = M.treeview
         clay.listview_open = M.listview_open
 		clay.listview_close = M.listview_close
         
@@ -563,11 +677,11 @@ local function drawNodeEditorCanvas(x, y, w, h, payload)
 	bgfx.bgfx_set_transient_vertex_buffer(0, tvb, 0, vertexCount)
 	bgfx.bgfx_set_transient_index_buffer(tib, 0, indexCount)
 	bgfx.bgfx_set_texture(0, device.s_texColor, device.white_tex, 0xffffffff)
-	bgfx.bgfx_set_uniform(u_transform2D, ffi.new("float[4]", 1, 1, 0, 0), 1)
-	bgfx.bgfx_set_uniform(u_rcBorder, ffi.new("float[4]", 0, 0, 0, 0), 1)
-	bgfx.bgfx_set_uniform(u_rcCorner, ffi.new("float[4]", 0, 0, 0, 0), 1)
-	bgfx.bgfx_set_uniform(u_rcParams, ffi.new("float[4]", 0, 0, 0, 0), 1)
-	bgfx.bgfx_set_uniform(u_borderColor, ffi.new("float[4]", 0, 0, 0, 0), 1)
+	setUniform4(u_transform2D, 1, 1, 0, 0)
+	setUniform4(u_rcBorder, 0, 0, 0, 0)
+	setUniform4(u_rcCorner, 0, 0, 0, 0)
+	setUniform4(u_rcParams, 0, 0, 0, 0)
+	setUniform4(u_borderColor, 0, 0, 0, 0)
 	local state = bit.bor(bgfx.BGFX_STATE_WRITE_RGB, bgfx.BGFX_STATE_WRITE_A,
 		bgfx.BGFX_STATE_BLEND_ALPHA, bgfx.BGFX_STATE_MSAA)
 	bgfx.bgfx_set_state(state, 0)
@@ -600,55 +714,47 @@ local function mainLoop()
 
 			if clay then
 				
-				local vertexStride = ffi.sizeof("Vertex")
 				for t, x, y, w, h, r, g, b, a, tl, tr, bl, br, left, right, top, bottom,
-						text, fontId, fontSize, letterSpacing, lineHeight, payload, clipH, clipV
+						text, fontId, fontSize, letterSpacing, lineHeight, payload, clipH, clipV, renderPacket
 						in clay.endLayoutFast(dt) do
 
 					-- Safe defaults before any bgfx_submit()
-					bgfx.bgfx_set_uniform(u_rcBorder, ffi.new("float[4]", 0, 0, 0, 0), 1)
-					bgfx.bgfx_set_uniform(u_borderColor, ffi.new("float[4]", 1, 1, 1, 1), 1)
-					bgfx.bgfx_set_uniform(u_rcCorner, ffi.new("float[4]", 0, 0, 0, 0), 1)
-					bgfx.bgfx_set_uniform(u_rcParams, ffi.new("float[4]", 0, 0, 0, 0), 1)
+					setUniform4(u_rcBorder, 0, 0, 0, 0)
+					setUniform4(u_borderColor, 1, 1, 1, 1)
+					setUniform4(u_rcCorner, 0, 0, 0, 0)
+					setUniform4(u_rcParams, 0, 0, 0, 0)
 
 					if t == clay.RENDER_RECTANGLE then
 						-- Convention: if all 4 radii are negative, draw an *inscribed circle*.
 						local drawCircle = (tl < 0 and tr < 0 and bl < 0 and br < 0)
 
-						local vertices, indices, vertCount, idxCount
-						if drawCircle then
-							vertices, indices, vertCount, idxCount = generateCircleVertices(x, y, w, h, r, g, b, a, 48)
-						else
-							vertices, indices = generateRectangleVertices(x, y, w, h, r, g, b, a)
-							vertCount, idxCount = 4, 6
-						end
+						local shape = retainedGeometry(renderPacket, "shape", function()
+							local vertices, indices, vertCount, idxCount
+							if drawCircle then
+								vertices, indices, vertCount, idxCount = generateCircleVertices(x, y, w, h, r, g, b, a, 48)
+							else
+								vertices, indices = generateRectangleVertices(x, y, w, h, r, g, b, a)
+								vertCount, idxCount = 4, 6
+							end
+							return { vertices = vertices, indices = indices, vertCount = vertCount, idxCount = idxCount }
+						end)
+						local vertices, indices = shape.vertices, shape.indices
+						local vertCount, idxCount = shape.vertCount, shape.idxCount
 
-						local tvb = ffi.new("bgfx_transient_vertex_buffer_t[1]")
-						local tib = ffi.new("bgfx_transient_index_buffer_t[1]")
-						tib[0].isIndex16 = true
-
-						if bgfx.bgfx_get_avail_transient_vertex_buffer(vertCount, device.vdecl) < vertCount then
+						if not bindGeometry(renderPacket, shape) then
 							print("Warning: Not enough transient buffer space")
 						else
-							bgfx.bgfx_alloc_transient_vertex_buffer(tvb, vertCount, device.vdecl)
-							bgfx.bgfx_alloc_transient_index_buffer(tib, idxCount, false)
-
-							ffi.copy(tvb[0].data, vertices, vertexStride * vertCount)
-							ffi.copy(tib[0].data, indices, ffi.sizeof("uint16_t") * idxCount)
-
-							bgfx.bgfx_set_transient_vertex_buffer(0, tvb, 0, vertCount)
-							bgfx.bgfx_set_transient_index_buffer(tib, 0, idxCount)
 							bgfx.bgfx_set_texture(0, device.s_texColor, device.white_tex, 0xffffffff)
-							bgfx.bgfx_set_uniform(u_transform2D, ffi.new("float[4]", 1, 1, 0, 0), 1)
+							setUniform4(u_transform2D, 1, 1, 0, 0)
 
 							local feather = 1.25
 							local invW = (w > 0) and (1.0 / w) or 0.0
 							local invH = (h > 0) and (1.0 / h) or 0.0
 
-							bgfx.bgfx_set_uniform(u_rcBorder, ffi.new("float[4]", 0, 0, 0, 0), 1)
-							bgfx.bgfx_set_uniform(u_borderColor, ffi.new("float[4]", r / 255, g / 255, b / 255, a / 255), 1)
-							bgfx.bgfx_set_uniform(u_rcCorner, ffi.new("float[4]", tl, tr, br, bl), 1)
-							bgfx.bgfx_set_uniform(u_rcParams, ffi.new("float[4]", feather, invW, invH, 0.0), 1)
+							setUniform4(u_rcBorder, 0, 0, 0, 0)
+							setUniform4(u_borderColor, r / 255, g / 255, b / 255, a / 255)
+							setUniform4(u_rcCorner, tl, tr, br, bl)
+							setUniform4(u_rcParams, feather, invW, invH, 0.0)
 
 							local state =
 								bit.bor(
@@ -665,31 +771,21 @@ local function mainLoop()
 						local circle = (tl < 0 and tr < 0 and bl < 0 and br < 0)
 
 						if circle and left > 0 then
-							local vertices, indices, vertCount, idxCount = generateRingVertices(x, y, w, h, left, r, g, b, a, 64)
+							local ring = retainedGeometry(renderPacket, "ring", function()
+								local vertices, indices, vertCount, idxCount = generateRingVertices(x, y, w, h, left, r, g, b, a, 64)
+								return { vertices = vertices, indices = indices, vertCount = vertCount, idxCount = idxCount }
+							end)
+							local vertices, indices, vertCount, idxCount = ring.vertices, ring.indices, ring.vertCount, ring.idxCount
 							if vertices ~= nil then
-								local tvb = ffi.new("bgfx_transient_vertex_buffer_t[1]")
-								local tib = ffi.new("bgfx_transient_index_buffer_t[1]")
-								tib[0].isIndex16 = true
-
-								if bgfx.bgfx_get_avail_transient_vertex_buffer(vertCount, device.vdecl) >= vertCount
-								   and bgfx.bgfx_get_avail_transient_index_buffer(idxCount, true) >= idxCount then
-
-									bgfx.bgfx_alloc_transient_vertex_buffer(tvb, vertCount, device.vdecl)
-									bgfx.bgfx_alloc_transient_index_buffer(tib, idxCount, false)
-
-									ffi.copy(tvb[0].data, vertices, vertexStride * vertCount)
-									ffi.copy(tib[0].data, indices, ffi.sizeof("uint16_t") * idxCount)
-
-									bgfx.bgfx_set_transient_vertex_buffer(0, tvb, 0, vertCount)
-									bgfx.bgfx_set_transient_index_buffer(tib, 0, idxCount)
+								if bindGeometry(renderPacket, ring) then
 									bgfx.bgfx_set_texture(0, device.s_texColor, device.white_tex, 0xffffffff)
 
 									-- neutralize rounded-rect shader path — we’re drawing raw geometry
-									bgfx.bgfx_set_uniform(u_transform2D, ffi.new("float[4]", 1,1,0,0), 1)
-									bgfx.bgfx_set_uniform(u_rcBorder,    ffi.new("float[4]", 0,0,0,0), 1)
-									bgfx.bgfx_set_uniform(u_rcCorner,    ffi.new("float[4]", 0,0,0,0), 1)
-									bgfx.bgfx_set_uniform(u_rcParams,    ffi.new("float[4]", 0,0,0,0), 1)
-									bgfx.bgfx_set_uniform(u_borderColor, ffi.new("float[4]", r/255, g/255, b/255, a/255), 1)
+									setUniform4(u_transform2D, 1,1,0,0)
+									setUniform4(u_rcBorder, 0,0,0,0)
+									setUniform4(u_rcCorner, 0,0,0,0)
+									setUniform4(u_rcParams, 0,0,0,0)
+									setUniform4(u_borderColor, r/255, g/255, b/255, a/255)
 
 									local state = bit.bor(
 										bgfx.BGFX_STATE_WRITE_RGB,
@@ -709,32 +805,24 @@ local function mainLoop()
 							local invW = (w > 0) and (1.0 / w) or 0.0
 							local invH = (h > 0) and (1.0 / h) or 0.0
 
-							local vertices, indices = generateRectangleVertices(x, y, w, h, r, g, b, a)
-							local vertCount, idxCount = 4, 6
+							local shape = retainedGeometry(renderPacket, "borderShape", function()
+								local vertices, indices = generateRectangleVertices(x, y, w, h, r, g, b, a)
+								return { vertices = vertices, indices = indices, vertCount = 4, idxCount = 6 }
+							end)
+							local vertices, indices = shape.vertices, shape.indices
+							local vertCount, idxCount = shape.vertCount, shape.idxCount
 
-							local tvb = ffi.new("bgfx_transient_vertex_buffer_t[1]")
-							local tib = ffi.new("bgfx_transient_index_buffer_t[1]")
-							tib[0].isIndex16 = true
-
-							if bgfx.bgfx_get_avail_transient_vertex_buffer(vertCount, device.vdecl) < vertCount then
+							if not bindGeometry(renderPacket, shape) then
 								print("Warning: Not enough transient buffer space")
 							else
-								bgfx.bgfx_alloc_transient_vertex_buffer(tvb, vertCount, device.vdecl)
-								bgfx.bgfx_alloc_transient_index_buffer(tib, idxCount, false)
-
-								ffi.copy(tvb[0].data, vertices, vertexStride * vertCount)
-								ffi.copy(tib[0].data, indices, ffi.sizeof("uint16_t") * idxCount)
-
-								bgfx.bgfx_set_transient_vertex_buffer(0, tvb, 0, vertCount)
-								bgfx.bgfx_set_transient_index_buffer(tib, 0, idxCount)
 								bgfx.bgfx_set_texture(0, device.s_texColor, device.white_tex, 0xffffffff)
 
-								bgfx.bgfx_set_uniform(u_rcCorner, ffi.new("float[4]", tl, tr, br, bl), 1)
-								bgfx.bgfx_set_uniform(u_rcBorder, ffi.new("float[4]", left, right, top, bottom), 1)
-								bgfx.bgfx_set_uniform(u_borderColor, ffi.new("float[4]", r / 255, g / 255, b / 255, a / 255), 1)
+								setUniform4(u_rcCorner, tl, tr, br, bl)
+								setUniform4(u_rcBorder, left, right, top, bottom)
+								setUniform4(u_borderColor, r / 255, g / 255, b / 255, a / 255)
 
 								local modeVal = hasRounded and 1.0 or 2.0
-								bgfx.bgfx_set_uniform(u_rcParams, ffi.new("float[4]", feather, invW, invH, modeVal), 1)
+								setUniform4(u_rcParams, feather, invW, invH, modeVal)
 
 								local state =
 									bit.bor(
@@ -749,136 +837,94 @@ local function mainLoop()
 							end
 						end
 					elseif t == clay.RENDER_TEXT then
-						local font = font_manager.load(fontId, fontSize)
-						if text and #text > 0 and font then
-							local vertices, indices, vertCount, idxCount, decorations, textBatches = font_manager.generateTextVertices(font, text, x, y, r, g, b, a)
-
-							local batches = textBatches
-							if not batches or #batches == 0 then
-								batches = {{vertices=vertices, indices=indices, vertCount=vertCount, idxCount=idxCount, texture=font.texture}}
-							end
-
-							for _, batch in ipairs(batches) do
-								if batch.vertCount > 0 and batch.idxCount > 0 then
-									local tvb = ffi.new("bgfx_transient_vertex_buffer_t[1]")
-									local tib = ffi.new("bgfx_transient_index_buffer_t[1]")
-									tib[0].isIndex16 = true
-
-									local vertex_available = bgfx.bgfx_get_avail_transient_vertex_buffer(batch.vertCount, device.vdecl)
-									local index_available = bgfx.bgfx_get_avail_transient_index_buffer(batch.idxCount, true)
-									if vertex_available < batch.vertCount or index_available < batch.idxCount then
-										print("Warning: Not enough transient buffer space for text")
-									else
-										bgfx.bgfx_alloc_transient_vertex_buffer(tvb, batch.vertCount, device.vdecl)
-										bgfx.bgfx_alloc_transient_index_buffer(tib, batch.idxCount, false)
-
-										ffi.copy(tvb[0].data, batch.vertices, vertexStride * batch.vertCount)
-										ffi.copy(tib[0].data, batch.indices, ffi.sizeof("uint16_t") * batch.idxCount)
-
-										bgfx.bgfx_set_transient_vertex_buffer(0, tvb, 0, batch.vertCount)
-										bgfx.bgfx_set_transient_index_buffer(tib, 0, batch.idxCount)
-										bgfx.bgfx_set_texture(0, device.s_texColor, batch.texture or font.texture, 0xffffffff)
-										bgfx.bgfx_set_uniform(u_transform2D, ffi.new("float[4]", 1, 1, 0, 0), 1)
-
-										local state =
-										bit.bor(
-										bgfx.BGFX_STATE_WRITE_RGB,
-										bgfx.BGFX_STATE_WRITE_A,
-										bgfx.BGFX_STATE_MSAA,
-										bgfx.BGFX_STATE_BLEND_FUNC_SEPARATE(
-											bgfx.BGFX_STATE_BLEND_ONE,
-											bgfx.BGFX_STATE_BLEND_INV_SRC_ALPHA,
-											bgfx.BGFX_STATE_BLEND_ONE,
-											bgfx.BGFX_STATE_BLEND_INV_SRC_ALPHA
-										)
-									)
-									bgfx.bgfx_set_state(state, 0)
-									applyTopScissor()
-									bgfx.bgfx_submit(device.view_id, device.shader, 0, bgfx.BGFX_DISCARD_ALL)
+						if text and #text > 0 then
+							local textGeometry = retainedGeometry(renderPacket, "text", function()
+								local font = font_manager.load(fontId, fontSize)
+								if not font then return { font = false, batches = {}, decorations = {} } end
+								local vertices, indices, vertCount, idxCount, decorations, textBatches =
+									font_manager.generateTextVertices(font, text, x, y, r, g, b, a)
+								local batches = textBatches
+								if not batches or #batches == 0 then
+									batches = {{ vertices = vertices, indices = indices, vertCount = vertCount,
+										idxCount = idxCount, texture = font.texture }}
 								end
-								end
-							end
-							
-							if decorations and #decorations > 0 then
-								local totalV, totalI = 4 * #decorations, 6 * #decorations
-								local tvb = ffi.new("bgfx_transient_vertex_buffer_t[1]")
-								local tib = ffi.new("bgfx_transient_index_buffer_t[1]")
-								tib[0].isIndex16 = true
+								return { font = font_manager.retain(font), batches = batches, decorations = decorations or {} }
+							end)
+							local font = textGeometry.font
+							local batches = textGeometry.batches
+							local decorations = textGeometry.decorations
+							if font then
 
-								if  bgfx.bgfx_get_avail_transient_vertex_buffer(totalV, device.vdecl) >= totalV
-								and bgfx.bgfx_get_avail_transient_index_buffer(totalI, true) >= totalI then
-									bgfx.bgfx_alloc_transient_vertex_buffer(tvb, totalV, device.vdecl)
-									bgfx.bgfx_alloc_transient_index_buffer(tib, totalI, false)
-
-									local vptr = ffi.cast("uint8_t*", tvb[0].data)
-									local iptr = ffi.cast("uint16_t*", tib[0].data)
-									local vstride = ffi.sizeof("Vertex")
-									local vbase = 0
-									local iofs  = 0
-
-									for _, d in ipairs(decorations) do
-										local vtx, idx = generateRectangleVertices(d.x1, d.y - d.h*0.5, (d.x2 - d.x1), d.h,
-																				   d.color.r, d.color.g, d.color.b, d.color.a)
-										-- copy 4 verts
-										ffi.copy(vptr + vbase * vstride, vtx, vstride * 4)
-										-- copy 6 indices with base offset
-										iptr[iofs + 0] = vbase + 0
-										iptr[iofs + 1] = vbase + 1
-										iptr[iofs + 2] = vbase + 2
-										iptr[iofs + 3] = vbase + 0
-										iptr[iofs + 4] = vbase + 2
-										iptr[iofs + 5] = vbase + 3
-										vbase = vbase + 4
-										iofs  = iofs + 6
+								for _, batch in ipairs(batches) do
+									if batch.vertCount > 0 and batch.idxCount > 0 then
+										if not bindGeometry(renderPacket, batch) then
+											print("Warning: Not enough transient buffer space for text")
+										else
+											bgfx.bgfx_set_texture(0, device.s_texColor, batch.texture or font.texture, 0xffffffff)
+											setUniform4(u_transform2D, 1, 1, 0, 0)
+											local state = bit.bor(
+												bgfx.BGFX_STATE_WRITE_RGB,
+												bgfx.BGFX_STATE_WRITE_A,
+												bgfx.BGFX_STATE_MSAA,
+												bgfx.BGFX_STATE_BLEND_FUNC_SEPARATE(
+													bgfx.BGFX_STATE_BLEND_ONE,
+													bgfx.BGFX_STATE_BLEND_INV_SRC_ALPHA,
+													bgfx.BGFX_STATE_BLEND_ONE,
+													bgfx.BGFX_STATE_BLEND_INV_SRC_ALPHA))
+											bgfx.bgfx_set_state(state, 0)
+											applyTopScissor()
+											bgfx.bgfx_submit(device.view_id, device.shader, 0, bgfx.BGFX_DISCARD_ALL)
+										end
 									end
+								end
 
-									bgfx.bgfx_set_transient_vertex_buffer(0, tvb, 0, totalV)
-									bgfx.bgfx_set_transient_index_buffer(tib, 0, totalI)
-									bgfx.bgfx_set_texture(0, device.s_texColor, device.white_tex, 0xffffffff)
-
-									bgfx.bgfx_set_uniform(u_transform2D, ffi.new("float[4]", 1,1,0,0), 1)
-									bgfx.bgfx_set_uniform(u_rcBorder,    ffi.new("float[4]", 0,0,0,0), 1)
-									bgfx.bgfx_set_uniform(u_rcCorner,    ffi.new("float[4]", 0,0,0,0), 1)
-									bgfx.bgfx_set_uniform(u_rcParams,    ffi.new("float[4]", 0,0,0,0), 1)
-									bgfx.bgfx_set_uniform(u_borderColor, ffi.new("float[4]", 0,0,0,0), 1)
-
-									local state = bit.bor(
-										bgfx.BGFX_STATE_WRITE_RGB,
-										bgfx.BGFX_STATE_WRITE_A,
-										bgfx.BGFX_STATE_BLEND_ALPHA,
-										bgfx.BGFX_STATE_MSAA
-									)
-									bgfx.bgfx_set_state(state, 0)
-									applyTopScissor()
-									bgfx.bgfx_submit(device.view_id, device.shader, 0, bgfx.BGFX_DISCARD_ALL)
+								if decorations and #decorations > 0 then
+									local decorationGeometry = retainedGeometry(renderPacket, "decorations", function()
+										local vertexCount, indexCount = 4 * #decorations, 6 * #decorations
+										local vertices = ffi.new("Vertex[?]", vertexCount)
+										local indices = ffi.new("uint16_t[?]", indexCount)
+										local vertexBase, indexOffset = 0, 0
+										for _, decoration in ipairs(decorations) do
+											local quad, quadIndices = generateRectangleVertices(decoration.x1,
+												decoration.y - decoration.h * 0.5, decoration.x2 - decoration.x1,
+												decoration.h, decoration.color.r, decoration.color.g,
+												decoration.color.b, decoration.color.a)
+											ffi.copy(vertices + vertexBase, quad, ffi.sizeof("Vertex") * 4)
+											for i = 0, 5 do indices[indexOffset + i] = quadIndices[i] + vertexBase end
+											vertexBase, indexOffset = vertexBase + 4, indexOffset + 6
+										end
+										return { vertices = vertices, indices = indices, vertCount = vertexCount, idxCount = indexCount }
+									end)
+									if bindGeometry(renderPacket, decorationGeometry) then
+										bgfx.bgfx_set_texture(0, device.s_texColor, device.white_tex, 0xffffffff)
+										setUniform4(u_transform2D, 1, 1, 0, 0)
+										setUniform4(u_rcBorder, 0, 0, 0, 0)
+										setUniform4(u_rcCorner, 0, 0, 0, 0)
+										setUniform4(u_rcParams, 0, 0, 0, 0)
+										setUniform4(u_borderColor, 0, 0, 0, 0)
+										local state = bit.bor(
+											bgfx.BGFX_STATE_WRITE_RGB,
+											bgfx.BGFX_STATE_WRITE_A,
+											bgfx.BGFX_STATE_BLEND_ALPHA,
+											bgfx.BGFX_STATE_MSAA)
+										bgfx.bgfx_set_state(state, 0)
+										applyTopScissor()
+										bgfx.bgfx_submit(device.view_id, device.shader, 0, bgfx.BGFX_DISCARD_ALL)
+									end
 								end
 							end
 						end
 					elseif t == clay.RENDER_IMAGE then
-						local vertices, indices = generateRectangleVertices(x, y, w, h, 255, 255, 255, 255)
-						local vertCount = 4
-						local idxCount = 6
-
-						local tvb = ffi.new("bgfx_transient_vertex_buffer_t[1]")
-						local tib = ffi.new("bgfx_transient_index_buffer_t[1]")
-						tib[0].isIndex16 = true
-
-						if bgfx.bgfx_get_avail_transient_vertex_buffer(vertCount, device.vdecl) < vertCount then
+						local imageGeometry = retainedGeometry(renderPacket, "image", function()
+							local vertices, indices = generateRectangleVertices(x, y, w, h, 255, 255, 255, 255)
+							return { vertices = vertices, indices = indices, vertCount = 4, idxCount = 6 }
+						end)
+						if not bindGeometry(renderPacket, imageGeometry) then
 							print("Warning: Not enough transient buffer space")
 						else
-							bgfx.bgfx_alloc_transient_vertex_buffer(tvb, vertCount, device.vdecl)
-							bgfx.bgfx_alloc_transient_index_buffer(tib, idxCount, false)
-
-							ffi.copy(tvb[0].data, vertices, vertexStride * vertCount)
-							ffi.copy(tib[0].data, indices, ffi.sizeof("uint16_t") * idxCount)
-
-							bgfx.bgfx_set_transient_vertex_buffer(0, tvb, 0, vertCount)
-							bgfx.bgfx_set_transient_index_buffer(tib, 0, idxCount)
-							
-							local tex_h = payload and ffi.new("bgfx_texture_handle_t",payload) or device.white_tex
-							bgfx.bgfx_set_texture(0, device.s_texColor, tex_h, 0xffffffff)
-							bgfx.bgfx_set_uniform(u_transform2D, ffi.new("float[4]", 1, 1, 0, 0), 1)
-						
+							local textureHandle = payload and ffi.new("bgfx_texture_handle_t", payload) or device.white_tex
+							bgfx.bgfx_set_texture(0, device.s_texColor, textureHandle, 0xffffffff)
+							setUniform4(u_transform2D, 1, 1, 0, 0)
 							bgfx.bgfx_set_state(bgfx.BGFX_STATE_WRITE_RGB + bgfx.BGFX_STATE_BLEND_ALPHA, 0)
 							applyTopScissor()
 							bgfx.bgfx_submit(device.view_id, device.shader, 0, bgfx.BGFX_DISCARD_ALL)

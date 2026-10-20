@@ -1,5 +1,36 @@
 local ffi = require("ffi")
-local bit = require("bit")
+local ok_bit, bit = pcall(require, "bit")
+if not ok_bit then
+    local UINT32 = 4294967296
+    local function bitop(a, b, use_or)
+        a = math.floor(tonumber(a) or 0) % UINT32
+        b = math.floor(tonumber(b) or 0) % UINT32
+        local result, place = 0, 1
+        while a > 0 or b > 0 do
+            local abit, bbit = a % 2, b % 2
+            if (use_or and (abit ~= 0 or bbit ~= 0)) or (not use_or and abit ~= 0 and bbit ~= 0) then
+                result = result + place
+            end
+            a = math.floor(a / 2)
+            b = math.floor(b / 2)
+            place = place * 2
+        end
+        return result
+    end
+    bit = {
+        band = function(a, b) return bitop(a, b, false) end,
+        bor = function(...)
+            local result = 0
+            for i = 1, select("#", ...) do
+                result = bitop(result, select(i, ...), true)
+            end
+            return result
+        end,
+        lshift = function(value, shift)
+            return (math.floor(tonumber(value) or 0) * (2 ^ (shift % 32))) % UINT32
+        end,
+    }
+end
 local band, bor, lshift = bit.band, bit.bor, bit.lshift
 
 local utf8 = require("utf8")
@@ -20,6 +51,60 @@ local fonts = {
 local font_aliases = {}
 local font_paths = {}
 local next_font_id = 0
+local MAX_CACHED_SIZES_PER_FACE = 32
+local FONT_ATLAS_SMALL_SIZE = 512
+local FONT_ATLAS_STANDARD_SIZE = 1024
+local FONT_ATLAS_LARGE_SIZE = 2048
+local FONT_ATLAS_SAMPLER_FLAGS = bgfx.BGFX_SAMPLER_U_CLAMP + bgfx.BGFX_SAMPLER_V_CLAMP
+local font_cache_clock = 0
+
+local function normalize_font_size(size)
+    size = tonumber(size) or 16
+    if size < 1 then return 1 end
+    return math.floor(size + 0.5)
+end
+
+local function font_atlas_size(size)
+    if size <= 24 then return FONT_ATLAS_SMALL_SIZE end
+    if size <= 64 then return FONT_ATLAS_STANDARD_SIZE end
+    return FONT_ATLAS_LARGE_SIZE
+end
+
+local function release_font(font)
+    if font.pack_context ~= nil then
+        stbtt.PackEnd(font.pack_context)
+        font.pack_context = nil
+    end
+    if font.texture ~= nil and font.texture.idx ~= INVALID_HANDLE then
+        bgfx.bgfx_destroy_texture(font.texture)
+    end
+    font.texture = nil
+    font.faces = nil
+    font.data = nil
+    font.info = nil
+    font.atlas_pixels = nil
+    font.rgba = nil
+    font.glyphs = nil
+    font.glyphs_first = nil
+    font.glyphs_count = nil
+    font.glyphs_face = nil
+end
+
+local function evict_oldest_font(size_map)
+    local oldest_size, oldest_font
+    for size, font in pairs(size_map) do
+        if (font.references or 0) == 0 and
+            (not oldest_font or (font.last_used or 0) < (oldest_font.last_used or 0)) then
+            oldest_size, oldest_font = size, font
+        end
+    end
+    if oldest_font then
+        size_map[oldest_size] = nil
+        release_font(oldest_font)
+        return true
+    end
+    return false
+end
 
 local function normalize_font_path(path)
     if type(path) ~= "string" or path == "" then return nil end
@@ -193,13 +278,7 @@ local function flushAtlas(font)
     local count = font.width * font.height
 
     -- grayscale -> RGBA
-    for i = 0, count - 1 do
-        local v = font.atlas_pixels[i]
-        font.rgba[i * 4 + 0] = v
-        font.rgba[i * 4 + 1] = v
-        font.rgba[i * 4 + 2] = v
-        font.rgba[i * 4 + 3] = v
-    end
+    stbtt.GrayscaleToRGBA(font.atlas_pixels, font.rgba, count)
 
     local mem = bgfx.bgfx_copy(font.rgba, count * 4)
     bgfx.bgfx_update_texture_2d(font.texture, 0, 0, 0, 0, font.width, font.height, mem, font.width * 4)
@@ -227,7 +306,6 @@ local function packGlyph(font, codepoint)
                 font.glyphs_face = font.glyphs_face or {}
                 font.glyphs_face[#font.glyphs] = font.id
                 font.atlas_dirty = true
-                flushAtlas(font)
                 return true
             else
                 print(string.format("[warn] pack failed for U+%04X..U+%04X", first, first + count - 1))
@@ -254,7 +332,6 @@ local function packOneGlyphFromFace(font, faceIdx, cp)
     font.glyphs_face = font.glyphs_face or {}
     font.glyphs_face[#font.glyphs] = faceIdx
     font.atlas_dirty = true
-    flushAtlas(font)
 
     return true
 end
@@ -399,10 +476,25 @@ function M.load(font_id, font_size)
     local filename = fonts[font_id]
     assert(filename, "Invalid font id " .. tostring(font_id))
 
-    if not font_cache[font_id] then
-        font_cache[font_id] = {}
-    elseif font_cache[font_id][font_size] then
-        return font_cache[font_id][font_size]
+    font_size = normalize_font_size(font_size)
+    local size_map = font_cache[font_id]
+    if not size_map then
+        size_map = {}
+        font_cache[font_id] = size_map
+    end
+
+    local cached = size_map[font_size]
+    if cached then
+        font_cache_clock = font_cache_clock + 1
+        cached.last_used = font_cache_clock
+        return cached
+    end
+
+    local cached_sizes = 0
+    for _ in pairs(size_map) do cached_sizes = cached_sizes + 1 end
+    while cached_sizes >= MAX_CACHED_SIZES_PER_FACE do
+        if not evict_oldest_font(size_map) then break end
+        cached_sizes = cached_sizes - 1
     end
 
     -- Load primary font file (requested face)
@@ -413,10 +505,12 @@ function M.load(font_id, font_size)
     local fontData = ffi.new("uint8_t[?]", #fontDataStr)
     ffi.copy(fontData, fontDataStr, #fontDataStr)
 
-    local atlasWidth, atlasHeight = 2048, 2048
+    local atlasWidth, atlasHeight = font_atlas_size(font_size), font_atlas_size(font_size)
     local atlasPixels = ffi.new("uint8_t[?]", atlasWidth * atlasHeight)
     local packContext = ffi.new("stbtt_pack_context[1]")
 
+    -- Leave a texel around each glyph so linear filtering does not pull in
+    -- neighboring glyphs from the atlas.
     assert(stbtt.PackBegin(packContext, atlasPixels, atlasWidth, atlasHeight, 0, 1, nil) ~= 0, "PackBegin failed")
     
     stbtt.PackSetOversampling(packContext, 2, 2)
@@ -428,17 +522,12 @@ function M.load(font_id, font_size)
 
     -- Convert grayscale -> RGBA
     local rgba = ffi.new("uint8_t[?]", atlasWidth * atlasHeight * 4)
-    for i = 0, atlasWidth * atlasHeight - 1 do
-        local v = atlasPixels[i]
-        rgba[i * 4 + 0] = v
-        rgba[i * 4 + 1] = v
-        rgba[i * 4 + 2] = v
-        rgba[i * 4 + 3] = v
-    end
+    stbtt.GrayscaleToRGBA(atlasPixels, rgba, atlasWidth * atlasHeight)
 
 	-- make a mutable texture
     local mem = bgfx.bgfx_copy(rgba, atlasWidth * atlasHeight * 4)
-    local tex = bgfx.bgfx_create_texture_2d(atlasWidth, atlasHeight, false, 1, bgfx.BGFX_TEXTURE_FORMAT_RGBA8, bgfx.BGFX_SAMPLER_POINT, nil)
+    local tex = bgfx.bgfx_create_texture_2d(atlasWidth, atlasHeight, false, 1,
+        bgfx.BGFX_TEXTURE_FORMAT_RGBA8, FONT_ATLAS_SAMPLER_FLAGS, nil)
 	bgfx.bgfx_update_texture_2d(tex, 0, 0, 0, 0, atlasWidth, atlasHeight, mem, atlasWidth * 4)
 
     local fontInfo = ffi.new("stbtt_fontinfo[1]")
@@ -467,8 +556,11 @@ function M.load(font_id, font_size)
         next_y = 0,
         row_height = 0,
         rgba = rgba,
+        references = 0,
         faces = {} -- donor/primary faces cache by faceIdx
     }
+    font_cache_clock = font_cache_clock + 1
+    font.last_used = font_cache_clock
 
     -- make sure primary face is cached
     font.faces[font_id] = { data = font.data, info = font.info, scale = font.scale }
@@ -477,8 +569,22 @@ function M.load(font_id, font_size)
     font.space_advance = getGlyphAdvance(font, 32)
     font.tab_advance   = font.space_advance * 4
 
-    font_cache[font_id][font_size] = font
+    size_map[font_size] = font
     return font
+end
+
+-- Retained render packets keep font textures alive until their packets are
+-- replaced or destroyed. Immediate-mode geometry is submitted in the current
+-- frame and does not need an extra reference.
+function M.retain(font)
+    if font then font.references = (font.references or 0) + 1 end
+    return font
+end
+
+function M.release(font)
+    if font and (font.references or 0) > 0 then
+        font.references = font.references - 1
+    end
 end
 
 function M.id(alias)
@@ -797,9 +903,33 @@ end
 	caching could grow indefinitely, so you’d just clear it periodically.
 --]]
 local measure_cache = {}
+local MEASURE_CACHE_LIMIT = 8192
+local measure_cache_keys, measure_cache_tokens = {}, {}
+local measure_cache_cursor, measure_cache_count, measure_cache_token = 1, 0, 0
 
 function M.clearMeasureCache()
     measure_cache = {}
+    measure_cache_keys, measure_cache_tokens = {}, {}
+    measure_cache_cursor, measure_cache_count, measure_cache_token = 1, 0, 0
+end
+
+local function cache_measurement(key, width, height)
+    local old_key = measure_cache_keys[measure_cache_cursor]
+    local old_token = measure_cache_tokens[measure_cache_cursor]
+    if old_key then
+        local old_value = measure_cache[old_key]
+        if old_value and old_value.token == old_token then
+            measure_cache[old_key] = nil
+        end
+    else
+        measure_cache_count = measure_cache_count + 1
+    end
+
+    measure_cache_token = measure_cache_token + 1
+    measure_cache_keys[measure_cache_cursor] = key
+    measure_cache_tokens[measure_cache_cursor] = measure_cache_token
+    measure_cache[key] = { width, height, token = measure_cache_token }
+    measure_cache_cursor = measure_cache_cursor % MEASURE_CACHE_LIMIT + 1
 end
 
 local function font_line_metrics(font)
@@ -947,6 +1077,8 @@ end
 
 local function measure_text(text, font_id, font_px, skip_tags)
     text = tostring(text or "")
+    font_id = tonumber(font_id) or 0
+    font_px = normalize_font_size(font_px)
     local key = string.format("%d:%d:%s:%s", font_id, font_px, skip_tags and "literal" or "rich", text)
     local cached = measure_cache[key]
     if cached then return cached[1], cached[2] end
@@ -975,16 +1107,23 @@ local function measure_text(text, font_id, font_px, skip_tags)
     end
     if #lines > 0 then total_height = total_height + lines[#lines].shadow_down end
 
-    measure_cache[key] = {total_width, total_height}
+    cache_measurement(key, total_width, total_height)
     return total_width, total_height
 end
 
-function M.measureText(text, config, skip_tags)
-    return measure_text(text, config.fontId, config.fontSize, skip_tags)
+-- Canonical scalar API used by Clay's text measurement callback.
+-- The table form remains accepted for older callers; new code should pass
+-- font id and size directly to avoid allocating a config table per measure.
+function M.measureText(text, font_id, font_px, letter_spacing, line_height,
+        wrap_mode, text_alignment, r, g, b, a)
+    if type(font_id) == "table" then
+        return measure_text(text, font_id.fontId, font_id.fontSize, font_px)
+    end
+    return measure_text(text, font_id, font_px, false)
 end
 
-function M.measureTextFast(text, font_id, font_px)
-    return measure_text(text, font_id, font_px, false)
+function M.measureTextConfig(text, config, skip_tags)
+    return measure_text(text, config.fontId, config.fontSize, skip_tags)
 end
 
 -- Helper for text vertices using stbtt packed atlas
@@ -1170,6 +1309,63 @@ end
 function M.generateTextVertices(font, text, x, y, r, g, b, a)
     local segments = parseRichText(text, r or 255, g or 255, b or 255, a or 255, font.id, font.size)
     local lines = layout_rich_text_lines(segments, font)
+
+    -- Most UI labels are one unstyled line. Return the already-generated run
+    -- arrays directly instead of copying every vertex and index through Lua
+    -- tables and allocating a second pair of FFI arrays.
+    if #lines == 1 and #lines[1].runs == 1 then
+        local line = lines[1]
+        local run = line.runs[1]
+        local segment = run.segment
+        local segment_font = run.font
+        local run_y = y + line.ascent - run.metrics.ascent
+        local vertices, indices, vertex_count, index_count, x_end =
+            generateTextVerticesRaw(
+                segment_font, run.text, x, run_y,
+                segment.color.r, segment.color.g, segment.color.b, segment.color.a,
+                {
+                    kern = segment.kern,
+                    tab_origin = x,
+                    italic = segment.italic,
+                    bold = segment.bold,
+                    shadow = segment.shadow,
+                    shadow_strength = segment.shadow_strength,
+                    shadow_color = segment.shadow_color,
+                    shadow_dx = segment.shadow_dx,
+                    shadow_dy = segment.shadow_dy,
+                    outline = segment.outline,
+                    outline_size = segment.outline_size,
+                    outline_strength = segment.outline_strength,
+                    outline_color = segment.outline_color,
+                    italic_shear = STYLE.italic_shear,
+                    bold_passes = STYLE.bold_passes,
+                    bold_px = STYLE.bold_px,
+                }
+            )
+        flushAtlas(segment_font)
+        local decorations = {}
+        if segment.strike and x_end > x then
+            decorations[1] = {
+                x1 = x,
+                x2 = x_end,
+                y = y + line.ascent - run.metrics.ascent * 0.34,
+                h = math.max(1, math.floor(segment_font.size * 0.06 + 0.5)),
+                color = segment.color,
+            }
+        end
+        local batches = {}
+        if vertex_count > 0 and index_count > 0 then
+            batches[1] = {
+                texture = segment_font.texture,
+                vertices = vertices,
+                indices = indices,
+                vertCount = vertex_count,
+                idxCount = index_count,
+            }
+        end
+        return vertices, indices, vertex_count, index_count, decorations, batches
+    end
+
     local verts, inds = {}, {}
     local run_meshes, decorations = {}, {}
     local totalVcount, totalIcount = 0, 0
@@ -1251,6 +1447,21 @@ function M.generateTextVertices(font, text, x, y, r, g, b, a)
         line_top = line_top + line.advance
     end
 
+    -- Text measurement can discover several new Unicode glyphs in an atlas.
+    -- Upload each font atlas once per text draw, after all glyph packing, rather
+    -- than converting and uploading the entire atlas once for every codepoint.
+    local flushed_fonts = { [font] = true }
+    flushAtlas(font)
+    for _, line in ipairs(lines) do
+        for _, run in ipairs(line.runs) do
+            local run_font = run.font
+            if not flushed_fonts[run_font] then
+                flushAtlas(run_font)
+                flushed_fonts[run_font] = true
+            end
+        end
+    end
+
     local vertices = ffi.new("Vertex[?]", totalVcount)
     local indices = ffi.new("uint16_t[?]", totalIcount)
     for i = 1, totalVcount do vertices[i - 1] = verts[i] end
@@ -1330,35 +1541,13 @@ end
 function M.shutdown()
     for _, size_map in pairs(font_cache) do
         for _, font in pairs(size_map) do
-            if font.pack_context ~= nil then
-                stbtt.PackEnd(font.pack_context)
-                font.pack_context = nil
-            end
-
-            if font.texture ~= nil and font.texture.idx ~= INVALID_HANDLE then
-                bgfx.bgfx_destroy_texture(font.texture)
-                font.texture = nil
-            end
-
-            if font.faces then
-                for key in pairs(font.faces) do
-                    font.faces[key] = nil
-                end
-                font.faces = nil
-            end
-
-            font.data = nil
-            font.info = nil
-            font.atlas_pixels = nil
-            font.rgba = nil
-            font.glyphs = nil
-            font.glyphs_first = nil
-            font.glyphs_count = nil
-            font.glyphs_face = nil
+            release_font(font)
         end
     end
 
     font_cache = {}
+    font_cache_clock = 0
+    M.clearMeasureCache()
 end
 
 return M

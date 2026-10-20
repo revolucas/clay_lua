@@ -15,3 +15,7 @@ bin/linux64/**
 bin/x64/**
 !bin/x64/.gitkeep
 
+# Emscripten outputs and the external Lua 5.4 + FFI-Wasm checkout.
+/web/build/
+/web/dist/
+/web/vendor/

@@ -1,5 +1,15 @@
 local ffi = require("ffi")
-local bit = require("bit")
+local ok_bit, bit = pcall(require, "bit")
+if not ok_bit then
+    bit = {
+        rshift = function(value, amount)
+            return math.floor((tonumber(value) % 4294967296) / (2 ^ amount))
+        end,
+        lshift = function(value, amount)
+            return (tonumber(value) * (2 ^ amount)) % 4294967296
+        end,
+    }
+end
 local ffi_tryload = require("ffi.ffi_loader").tryload
 ffi.cdef([[
 typedef enum bgfx_fatal
@@ -1316,6 +1326,36 @@ typedef bgfx_interface_vtbl_t* (*PFN_BGFX_GET_INTERFACE)(uint32_t _version);
 bgfx_interface_vtbl_t* bgfx_get_interface(uint32_t _version);
 ]])
 
+if ffi.arch == "wasm" then
+	ffi.cdef([[
+	const bgfx_memory_t* clay_bgfx_ffi_copy(const void* data, uint32_t size);
+	uint16_t clay_bgfx_ffi_create_texture_2d(uint16_t width, uint16_t height, bool has_mips, uint16_t num_layers, bgfx_texture_format_t format, const uint32_t* flags_words, const bgfx_memory_t* memory, uint32_t external);
+	uint16_t clay_bgfx_ffi_create_texture_3d(uint16_t width, uint16_t height, uint16_t depth, bool has_mips, bgfx_texture_format_t format, const uint32_t* flags_words, const bgfx_memory_t* memory, uint32_t external);
+	uint16_t clay_bgfx_ffi_create_texture_cube(uint16_t size, bool has_mips, uint16_t num_layers, bgfx_texture_format_t format, const uint32_t* flags_words, const bgfx_memory_t* memory, uint32_t external);
+	uint16_t clay_bgfx_ffi_create_uniform(const char* name, bgfx_uniform_type_t type, uint16_t count);
+	uint16_t clay_bgfx_ffi_create_shader(const bgfx_memory_t* memory);
+	uint16_t clay_bgfx_ffi_create_program(uint16_t vertex_shader, uint16_t fragment_shader, bool destroy_shaders);
+	uint16_t clay_bgfx_ffi_create_vertex_layout(const bgfx_vertex_layout_t* layout);
+	uint16_t clay_bgfx_ffi_create_vertex_buffer(const bgfx_memory_t* memory, const bgfx_vertex_layout_t* layout, uint16_t flags);
+	uint16_t clay_bgfx_ffi_create_index_buffer(const bgfx_memory_t* memory, uint16_t flags);
+	void clay_bgfx_ffi_destroy_texture(uint16_t index);
+	void clay_bgfx_ffi_update_texture_2d(uint16_t index, uint16_t layer, uint8_t mip, uint16_t x, uint16_t y, uint16_t width, uint16_t height, const bgfx_memory_t* memory, uint16_t pitch);
+	void clay_bgfx_ffi_destroy_uniform(uint16_t index);
+	void clay_bgfx_ffi_set_uniform(uint16_t index, const void* value, uint16_t count);
+	void clay_bgfx_ffi_set_texture(uint8_t stage, uint16_t sampler, uint16_t texture, uint32_t flags);
+	void clay_bgfx_ffi_set_debug(uint32_t debug, uint16_t framebuffer, uint8_t scale);
+	void clay_bgfx_ffi_set_state(const uint32_t* state_words, uint32_t rgba);
+	void clay_bgfx_ffi_set_index_buffer(uint16_t index, uint32_t first, uint32_t count);
+	void clay_bgfx_ffi_set_vertex_buffer(uint8_t stream, uint16_t index, uint32_t start, uint32_t count);
+	bool clay_bgfx_ffi_set_transient_buffers(const bgfx_vertex_layout_t* layout, const void* vertices, uint32_t vertex_count, const uint16_t* indices, uint32_t index_count);
+	void clay_bgfx_ffi_submit(uint16_t view, uint16_t program, uint32_t depth, uint8_t flags);
+	void clay_bgfx_ffi_destroy_program(uint16_t index);
+	void clay_bgfx_ffi_destroy_vertex_buffer(uint16_t index);
+	void clay_bgfx_ffi_destroy_index_buffer(uint16_t index);
+	void clay_bgfx_ffi_destroy_vertex_layout(uint16_t index);
+	]])
+end
+
 local bgfx_api = {}
 bgfx_api.BGFX_API_VERSION = 166
 bgfx_api.BGFX_STATE_WRITE_R = 1
@@ -2212,19 +2252,132 @@ if bgfx_interface == nil or bgfx_interface == ffi.NULL then
 end
 
 bgfx_api.bgfx_create_texture_2d = function(_width, _height, _hasMips, _numLayers, _format, _flags, _mem, _external)
-	return C.bgfx_create_texture_2d(_width, _height, _hasMips, _numLayers, _format, _flags, _mem, _external or 0)
+	return bgfx_interface.create_texture_2d(_width, _height, _hasMips, _numLayers, _format, _flags, _mem, _external or 0)
 end
 
 bgfx_api.bgfx_create_texture_3d = function(_width, _height, _depth, _hasMips, _format, _flags, _mem, _external)
-	return C.bgfx_create_texture_3d(_width, _height, _depth, _hasMips, _format, _flags, _mem, _external or 0)
+	return bgfx_interface.create_texture_3d(_width, _height, _depth, _hasMips, _format, _flags, _mem, _external or 0)
 end
 
 bgfx_api.bgfx_create_texture_cube = function(_size, _hasMips, _numLayers, _format, _flags, _mem, _external)
-	return C.bgfx_create_texture_cube(_size, _hasMips, _numLayers, _format, _flags, _mem, _external or 0)
+	return bgfx_interface.create_texture_cube(_size, _hasMips, _numLayers, _format, _flags, _mem, _external or 0)
+end
+
+if ffi.arch == "wasm" then
+	local uint64_scratch = ffi.new("uint64_t[1]")
+	local uint64_words = ffi.cast("const uint32_t *", uint64_scratch)
+	local function use_uint64_words(value)
+		uint64_scratch[0] = value or 0
+		return uint64_words
+	end
+	local function uint32_value(value)
+		return tonumber(ffi.cast("uint32_t", value or 0))
+	end
+	local function handle_index(handle)
+		if handle == nil then return 0xffff end
+		if type(handle) == "number" then return handle end
+		return tonumber(handle.idx) or 0xffff
+	end
+
+	local function make_handle(ctype, index)
+		local handle = ffi.new(ctype)
+		handle.idx = tonumber(index)
+		return handle
+	end
+	bgfx_api.bgfx_copy = function(data, size)
+		return C.clay_bgfx_ffi_copy(data, size)
+	end
+
+	bgfx_api.bgfx_create_texture_2d = function(width, height, has_mips, num_layers, format, flags, memory, external)
+		return make_handle("bgfx_texture_handle_t", C.clay_bgfx_ffi_create_texture_2d(
+			width, height, has_mips, num_layers, format, use_uint64_words(flags), memory,
+			uint32_value(external)))
+	end
+	bgfx_api.bgfx_create_texture_3d = function(width, height, depth, has_mips, format, flags, memory, external)
+		return make_handle("bgfx_texture_handle_t", C.clay_bgfx_ffi_create_texture_3d(
+			width, height, depth, has_mips, format, use_uint64_words(flags), memory,
+			uint32_value(external)))
+	end
+	bgfx_api.bgfx_create_texture_cube = function(size, has_mips, num_layers, format, flags, memory, external)
+		return make_handle("bgfx_texture_handle_t", C.clay_bgfx_ffi_create_texture_cube(
+			size, has_mips, num_layers, format, use_uint64_words(flags), memory,
+			uint32_value(external)))
+	end
+	bgfx_api.bgfx_create_uniform = function(...)
+		return make_handle("bgfx_uniform_handle_t", C.clay_bgfx_ffi_create_uniform(...))
+	end
+	bgfx_api.bgfx_create_shader = function(...)
+		return make_handle("bgfx_shader_handle_t", C.clay_bgfx_ffi_create_shader(...))
+	end
+	bgfx_api.bgfx_create_program = function(vertex_shader, fragment_shader, destroy_shaders)
+		return make_handle("bgfx_program_handle_t", C.clay_bgfx_ffi_create_program(
+			handle_index(vertex_shader), handle_index(fragment_shader), destroy_shaders))
+	end
+	bgfx_api.bgfx_create_vertex_layout = function(...)
+		return make_handle("bgfx_vertex_layout_handle_t", C.clay_bgfx_ffi_create_vertex_layout(...))
+	end
+	bgfx_api.bgfx_create_vertex_buffer = function(...)
+		return make_handle("bgfx_vertex_buffer_handle_t", C.clay_bgfx_ffi_create_vertex_buffer(...))
+	end
+	bgfx_api.bgfx_create_index_buffer = function(...)
+		return make_handle("bgfx_index_buffer_handle_t", C.clay_bgfx_ffi_create_index_buffer(...))
+	end
+
+	bgfx_api.bgfx_destroy_texture = function(handle)
+		return C.clay_bgfx_ffi_destroy_texture(handle_index(handle))
+	end
+	bgfx_api.bgfx_update_texture_2d = function(handle, ...)
+		return C.clay_bgfx_ffi_update_texture_2d(handle_index(handle), ...)
+	end
+	bgfx_api.bgfx_destroy_uniform = function(handle)
+		return C.clay_bgfx_ffi_destroy_uniform(handle_index(handle))
+	end
+	bgfx_api.bgfx_set_uniform = function(handle, ...)
+		return C.clay_bgfx_ffi_set_uniform(handle_index(handle), ...)
+	end
+	bgfx_api.bgfx_set_texture = function(stage, sampler, texture, flags)
+		return C.clay_bgfx_ffi_set_texture(stage, handle_index(sampler), handle_index(texture), flags)
+	end
+	bgfx_api.bgfx_set_debug = function(debug, framebuffer, scale)
+		return C.clay_bgfx_ffi_set_debug(debug, handle_index(framebuffer), scale)
+	end
+	bgfx_api.bgfx_set_state = function(state, rgba)
+		return C.clay_bgfx_ffi_set_state(use_uint64_words(state), rgba)
+	end
+	bgfx_api.bgfx_set_index_buffer = function(handle, ...)
+		return C.clay_bgfx_ffi_set_index_buffer(handle_index(handle), ...)
+	end
+	bgfx_api.bgfx_set_vertex_buffer = function(stream, handle, ...)
+		return C.clay_bgfx_ffi_set_vertex_buffer(stream, handle_index(handle), ...)
+	end
+	bgfx_api.bgfx_set_transient_buffers = function(...)
+		return C.clay_bgfx_ffi_set_transient_buffers(...)
+	end
+	bgfx_api.bgfx_submit = function(view, program, ...)
+		return C.clay_bgfx_ffi_submit(view, handle_index(program), ...)
+	end
+	bgfx_api.bgfx_destroy_program = function(handle)
+		return C.clay_bgfx_ffi_destroy_program(handle_index(handle))
+	end
+	bgfx_api.bgfx_destroy_vertex_buffer = function(handle)
+		return C.clay_bgfx_ffi_destroy_vertex_buffer(handle_index(handle))
+	end
+	bgfx_api.bgfx_destroy_index_buffer = function(handle)
+		return C.clay_bgfx_ffi_destroy_index_buffer(handle_index(handle))
+	end
+	bgfx_api.bgfx_destroy_vertex_layout = function(handle)
+		return C.clay_bgfx_ffi_destroy_vertex_layout(handle_index(handle))
+	end
 end
 
 return setmetatable( bgfx_api, {
 	__index = function( table, key )
-		return C[ key ]
+		if ffi.arch ~= "wasm" then return C[key] end
+		local function_name = type(key) == "string" and key:match("^bgfx_(.+)$")
+		if not function_name then return nil end
+		local ok, fn = pcall(function() return bgfx_interface[function_name] end)
+		if not ok or fn == nil then return nil end
+		table[key] = fn
+		return fn
 	end
 } )

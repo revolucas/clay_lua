@@ -1,4 +1,5 @@
 local ffi = require 'ffi'
+local ffi_tryload = require("ffi.ffi_loader").tryload
 
 -- Define C structures and functions from stb_truetype.h
 ffi.cdef[[
@@ -116,55 +117,10 @@ void stbtt_PackFontRangesPackRects(stbtt_pack_context *spc, stbrp_rect *rects, i
 int stbtt_PackFontRangesRenderIntoRects(stbtt_pack_context *spc, const stbtt_fontinfo *info, stbtt_pack_range *ranges, int num_ranges, stbrp_rect *rects);
 int stbtt_PackFontRanges(stbtt_pack_context *spc, const unsigned char *fontdata, int font_index, stbtt_pack_range *ranges, int num_ranges);
 int stbtt_PackFontRange(stbtt_pack_context *spc, const unsigned char *fontdata, int font_index, float font_size, int first_unicode_char_in_range, int num_chars_in_range, stbtt_packedchar *chardata_for_range);
+void stbtt_GrayscaleToRGBA(const unsigned char *source, unsigned char *destination, int pixel_count);
 void stbtt_GetScaledFontVMetrics(const unsigned char *fontdata, int index, float size, float *ascent, float *descent, float *lineGap);
 const char *stbtt_GetFontNameString(const stbtt_fontinfo *font, int *length, int platformID, int encodingID, int languageID, int nameID);
 ]]
-local function ffi_tryload(name)
-    -- Let the OS loader search by bare name first
-    local ok, lib = pcall(ffi.load, name)
-    if ok then
-        return lib
-    end
-
-    -- Prepare candidate basenames to try in cpath patterns
-    local bases = {name}
-    if not name:match("^lib") then
-        bases[#bases + 1] = "lib" .. name
-    else
-        bases[#bases + 1] = (name:gsub("^lib", "")) -- also try without the prefix
-    end
-
-    -- helper
-    local function iter_cpath()
-        local i = 0
-        local entries = {}
-        for p in string.gmatch(package.cpath or "", "[^;]+") do
-            i = i + 1
-            entries[i] = p
-        end
-        local n = 0
-        return function()
-            n = n + 1
-            return entries[n]
-        end
-    end
-
-    -- Walk package.cpath patterns
-    for pat in iter_cpath() do
-        for _, base in ipairs(bases) do
-            local candidate
-            if pat:find("%?") then
-                candidate = (pat:gsub("%%", "%%%%")):gsub("%?", base) -- escape % for gsub safety
-            end
-			local ok, lib = pcall(ffi.load, candidate)
-			if ok then
-				return lib
-			end
-        end
-    end
-
-    error(("ffi_tryload: failed to load '%s' via ffi.load and package.cpath"):format(name))
-end
 local stbi = {}
 local lib = ffi_tryload("libstb_truetype")  -- Adjust the library name if needed
 stbi = setmetatable({}, {

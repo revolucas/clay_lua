@@ -1,6 +1,7 @@
 -- component/radio.lua (new builder API, no per-call default table churn)
 local window = require("window")
 local theme = require("theme")
+local ComponentBuilder = require("component.builder")
 
 _radio_group = _radio_group or {} -- per-group selected value
 _radio_btn   = _radio_btn   or {} -- per-button press state
@@ -14,13 +15,9 @@ local RADIO_DEFAULT = {
   allowNone = false,
 }
 
--- radio(elid, label, groupKey, myValue, defaultSelected, opts)
--- opts (all optional; read-only):
---   opts.size, opts.gap, opts.fontId, opts.fontSize, opts.disabled
---   opts.colors: { ringBase, ringHov, ringAct, ringDis, border, dot, label, dotBorder }
---   opts.allowNone: true to allow deselecting all by clicking selected
---   opts.transitionDuration: indicator and color transition time in seconds (0 disables)
-function radio(elid, label, groupKey, myValue, defaultSelected, opts)
+-- radio(id, label, groupKey, value, defaultSelected): configure fluently,
+-- then call :draw(). :allowNone(true) allows clearing the selected option.
+local function render_radio(elid, label, groupKey, myValue, defaultSelected, opts)
   -- input (read once)
   local down = (window.mouseButtonDown(window.MOUSE_BUTTON_LEFT))
 
@@ -106,42 +103,52 @@ function radio(elid, label, groupKey, myValue, defaultSelected, opts)
     :width(clay.SIZING_FIT)
     :height(clay.SIZING_FIXED, size)
     :childGap(gap)
-    :children(function()
-      local ringBuilder = clay.element(ringId)
-        :width(clay.SIZING_FIXED, size)
-        :height(clay.SIZING_FIXED, size)
-        :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
-        :backgroundColor(C(ringCol))
-        :borderColor(C(border))
-        :borderWidth(1)
-        :cornerRadius(-1, -1, -1, -1) -- circle
-      if transitionDuration > 0 then
-        ringBuilder:transition(transitionDuration, "backgroundColor")
-      end
-      ringBuilder:children(function()
-        -- Keep the dot in the tree while unselected so selection can fade in
-        -- and out without relying on element enter/exit transitions.
-        local dotBuilder = clay.element(dotId)
-          :width(clay.SIZING_FIXED, dotSize)
-          :height(clay.SIZING_FIXED, dotSize)
-          :backgroundColor(C(dotColor))
-          :borderColor(C(dotBorderColor))
-          :borderWidth(1)
-          :cornerRadius(-1, -1, -1, -1)
-        if transitionDuration > 0 then
-          dotBuilder:transition(transitionDuration, "backgroundColor", "borderColor")
-        end
-        dotBuilder:close()
-      end)
+    :open()
+  local ringBuilder = clay.element(ringId)
+    :width(clay.SIZING_FIXED, size)
+    :height(clay.SIZING_FIXED, size)
+    :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
+    :backgroundColor(C(ringCol))
+    :borderColor(C(border))
+    :borderWidth(1)
+    :cornerRadius(-1, -1, -1, -1) -- circle
+  if transitionDuration > 0 then
+    ringBuilder:transition(transitionDuration, "backgroundColor")
+  end
+  ringBuilder:open()
 
-      if label ~= nil then
-        clay.text(label)
-          :fontId(fontId)
-          :fontSize(fontSize)
-          :textColor(C(labelCol))
-          :done()
-      end
-    end)
+  -- Keep the dot in the tree while unselected so selection can fade in and
+  -- out without relying on element enter/exit transitions.
+  local dotBuilder = clay.element(dotId)
+    :width(clay.SIZING_FIXED, dotSize)
+    :height(clay.SIZING_FIXED, dotSize)
+    :backgroundColor(C(dotColor))
+    :borderColor(C(dotBorderColor))
+    :borderWidth(1)
+    :cornerRadius(-1, -1, -1, -1)
+  if transitionDuration > 0 then
+    dotBuilder:transition(transitionDuration, "backgroundColor", "borderColor")
+  end
+  dotBuilder:close()
+  clay.close() -- radio ring
+
+  if label ~= nil then
+    clay.text(label)
+      :fontId(fontId)
+      :fontSize(fontSize)
+      :textColor(C(labelCol))
+      :done()
+  end
+  clay.close() -- radio row
 
   return selected, changed
+end
+
+ComponentBuilder.register("radio", function(builder)
+  return render_radio(rawget(builder, "_id"), rawget(builder, "_arg1"),
+    rawget(builder, "_arg2"), rawget(builder, "_arg3"), rawget(builder, "_arg4"), builder)
+end)
+
+function radio(elid, label, groupKey, myValue, defaultSelected)
+  return ComponentBuilder.new("radio", elid, label, groupKey, myValue, defaultSelected)
 end

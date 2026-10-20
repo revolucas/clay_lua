@@ -3,12 +3,20 @@ local window = require("window")
 local theme = require("theme")
 local font_manager = require("font_manager")
 local bit = require("bit")
+local ComponentBuilder = require("component.builder")
 local bor, band, rsh = bit.bor, bit.band, bit.rshift
 
 _edit_state  = _edit_state  or {} -- [id] -> state
 _edit_charbuf = _edit_charbuf or {}
 _edit_keys   = _edit_keys   or {}
-_edit_measure = font_manager.measureText
+local _edit_measure_config = { fontId = 0, fontSize = 0 }
+-- Resolve through the manager each time so switching renderers does not leave
+-- this component holding the old backend's text measurer.
+_edit_measure = function(text, fontId, fontSize, skipTags)
+    _edit_measure_config.fontId = fontId
+    _edit_measure_config.fontSize = fontSize
+    return font_manager.measureTextConfig(text, _edit_measure_config, skipTags)
+end
 _edit_repeat = _edit_repeat or {} -- [key] -> {down=false, next=0}
 local EMPTY_COLORS = {}
 
@@ -111,11 +119,10 @@ end
 -- caret from x (binary search over bytes)
 local function caret_from_x(text, xTarget, fontId, fontSize)
     if not _edit_measure then return #text + 1 end
-    local cfg = {fontId = fontId, fontSize = fontSize}
     local lo, hi = 1, #text + 1
     while lo < hi do
         local mid = math.floor((lo + hi) * 0.5)
-        local w = _edit_measure(text:sub(1, mid - 1), cfg, true) or 0
+        local w = _edit_measure(text:sub(1, mid - 1), fontId, fontSize, true) or 0
         if math.abs(w - xTarget) < 0.5 then lo = mid; break end
         if w <= xTarget then lo = mid + 1 else hi = mid end
     end
@@ -126,14 +133,14 @@ end
 
 local function measure_prefix(text, bytesEnd, fontId, fontSize)
     if bytesEnd <= 1 then return 0 end
-    return _edit_measure(text:sub(1, bytesEnd - 1), {fontId = fontId, fontSize = fontSize}, true) or 0
+    return _edit_measure(text:sub(1, bytesEnd - 1), fontId, fontSize, true) or 0
 end
 
 local function byte_from_x(text, targetX, fontId, fontSize)
     local lo, hi = 1, #text + 1
     while lo < hi do
         local mid = rsh(lo + hi, 1)
-        local w = _edit_measure(text:sub(1, mid - 1), {fontId = fontId, fontSize = fontSize}, true) or 0
+        local w = _edit_measure(text:sub(1, mid - 1), fontId, fontSize, true) or 0
         if math.abs(w - targetX) < 0.5 then lo = mid; break end
         if w <= targetX then lo = mid + 1 else hi = mid end
     end
@@ -194,8 +201,9 @@ local function set_char_callback(codepoint)
 end
 window.callback_register("window_set_char", set_char_callback)
 
--- PUBLIC: edit(elid, text, opts) -> newText, changed, focused
-function edit(elid, text, opts)
+-- PUBLIC: edit(id, text): configure fluently, then :draw() for
+-- newText, changed, focused.
+local function render_edit(elid, text, opts)
     local mx, my = window.mousePosition()
     local down = window.mouseButtonDown(window.MOUSE_BUTTON_LEFT)
     local timeNow = window.time()
@@ -622,52 +630,61 @@ function edit(elid, text, opts)
         :backgroundColor(bg.r, bg.g, bg.b, bg.a)
         :borderColor(c_border.r, c_border.g, c_border.b, c_border.a)
         :borderWidth(1,1,1,1)
-        :children(function()
-            if #leftVis > 0 then
-                clay.text(leftVis)
-                    :fontId(fontId)
-                    :fontSize(fontSize)
-                    :textColor(c_text.r, c_text.g, c_text.b, c_text.a)
-                    :wrapMode(clay.TEXT_WRAP_NONE)
-                    :close()
-            end
+        :open()
+    if #leftVis > 0 then
+        clay.text(leftVis)
+            :fontId(fontId)
+            :fontSize(fontSize)
+            :textColor(c_text.r, c_text.g, c_text.b, c_text.a)
+            :wrapMode(clay.TEXT_WRAP_NONE)
+            :close()
+    end
 
-            if not hasSel and st.focused then
-                local caretInside = (caretBi >= b0 and caretBi <= b1)
-                if caretInside and showCaret then
-                    clay.element(st._caretId)
-                        :width(clay.SIZING_FIXED, 1)
-                        :height(clay.SIZING_FIXED, math.floor(height * 0.65))
-                        :padding(1,0,1,0)
-                        :backgroundColor(c_caret.r, c_caret.g, c_caret.b, c_caret.a)
-                        :close()
-                end
-            end
+    if not hasSel and st.focused then
+        local caretInside = (caretBi >= b0 and caretBi <= b1)
+        if caretInside and showCaret then
+            clay.element(st._caretId)
+                :width(clay.SIZING_FIXED, 1)
+                :height(clay.SIZING_FIXED, math.floor(height * 0.65))
+                :padding(1,0,1,0)
+                :backgroundColor(c_caret.r, c_caret.g, c_caret.b, c_caret.a)
+                :close()
+        end
+    end
 
-            if hasSel and #midVis > 0 then
-                clay.element(st._selId)
-                    :layoutDirection(clay.LEFT_TO_RIGHT)
-                    :childGap(0)
-                    :backgroundColor(c_selBg.r, c_selBg.g, c_selBg.b, c_selBg.a)
-                    :children(function()
-                        clay.text(midVis)
-                            :fontId(fontId)
-                            :fontSize(fontSize)
-                            :textColor(c_selTxt.r, c_selTxt.g, c_selTxt.b, c_selTxt.a)
-                            :wrapMode(clay.TEXT_WRAP_NONE)
-                            :close()
-                    end)
-            end
+    if hasSel and #midVis > 0 then
+        clay.element(st._selId)
+            :layoutDirection(clay.LEFT_TO_RIGHT)
+            :childGap(0)
+            :backgroundColor(c_selBg.r, c_selBg.g, c_selBg.b, c_selBg.a)
+            :open()
+        clay.text(midVis)
+            :fontId(fontId)
+            :fontSize(fontSize)
+            :textColor(c_selTxt.r, c_selTxt.g, c_selTxt.b, c_selTxt.a)
+            :wrapMode(clay.TEXT_WRAP_NONE)
+            :close()
+        clay.close()
+    end
 
-            if #rightVis > 0 then
-                clay.text(rightVis)
-                    :fontId(fontId)
-                    :fontSize(fontSize)
-                    :textColor(c_text.r, c_text.g, c_text.b, c_text.a)
-                    :wrapMode(clay.TEXT_WRAP_NONE)
-                    :close()
-            end
-        end)
+    if #rightVis > 0 then
+        clay.text(rightVis)
+            :fontId(fontId)
+            :fontSize(fontSize)
+            :textColor(c_text.r, c_text.g, c_text.b, c_text.a)
+            :wrapMode(clay.TEXT_WRAP_NONE)
+            :close()
+    end
+    clay.close() -- edit field
 
+    if clay._trackRetainedKeyboardInput then clay._trackRetainedKeyboardInput(st.focused) end
     return text, changed, st.focused
+end
+
+ComponentBuilder.register("edit", function(builder)
+    return render_edit(rawget(builder, "_id"), rawget(builder, "_arg1"), builder)
+end)
+
+function edit(elid, text)
+    return ComponentBuilder.new("edit", elid, text)
 end

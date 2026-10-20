@@ -3,6 +3,7 @@ local ffi  = require("ffi")
 local bgfx = require("ffi.ffi_bgfx")
 local window = require("window")
 local theme = require("theme")
+local ComponentBuilder = require("component.builder")
 
 local _state = _state or {} -- per-id
 local EMPTY_OPTIONS = {}
@@ -130,7 +131,7 @@ local function update_textures(st, svW, svH, barW, barH, showAlpha)
 end
 
 -- returns rgba, changed, hsva
-function color_picker(elid, rgba_in, opts)
+local function render_color_picker(elid, rgba_in, opts)
   opts = opts or EMPTY_OPTIONS
 
   local componentDefaults = theme.defaults.colorPicker
@@ -190,7 +191,10 @@ function color_picker(elid, rgba_in, opts)
   if svW < 20 then svW = 20 end
   local barH = svH
 
-  update_textures(st, svW, svH, barW, barH, showAlpha)
+  local canvasBackend = device and device.renderer == "canvas2d"
+  if not canvasBackend then
+    update_textures(st, svW, svH, barW, barH, showAlpha)
+  end
 
   -- ids
   local svId  = clay.id("cptex-sv", key)
@@ -208,27 +212,40 @@ function color_picker(elid, rgba_in, opts)
     :borderColor(border.r, border.g, border.b, border.a)
     :borderWidth(1)
     :cornerRadius(radius)
-    :children(function()
-      clay.element(svId)
-        :width(clay.SIZING_FIXED, svW)
-        :height(clay.SIZING_FIXED, svH)
-        :imageData(st.svTex.idx)  -- passed through exactly
-        :close()
+    :open()
+  local svBuilder = clay.element(svId)
+    :width(clay.SIZING_FIXED, svW)
+    :height(clay.SIZING_FIXED, svH)
+  if canvasBackend then
+    svBuilder:customData({ kind="clay_canvas2d_color_picker", part="sv", hue=st.h })
+  else
+    svBuilder:imageData(st.svTex.idx)
+  end
+  svBuilder:close()
 
-      clay.element(hueId)
-        :width(clay.SIZING_FIXED, barW)
-        :height(clay.SIZING_FIXED, barH)
-        :imageData(st.hTex.idx)
-        :close()
+  local hueBuilder = clay.element(hueId)
+    :width(clay.SIZING_FIXED, barW)
+    :height(clay.SIZING_FIXED, barH)
+  if canvasBackend then
+    hueBuilder:customData({ kind="clay_canvas2d_color_picker", part="hue" })
+  else
+    hueBuilder:imageData(st.hTex.idx)
+  end
+  hueBuilder:close()
 
-      if showAlpha then
-        clay.element(aId)
-          :width(clay.SIZING_FIXED, barW)
-          :height(clay.SIZING_FIXED, barH)
-          :imageData(st.aTex.idx)
-          :close()
-      end
-    end)
+  if showAlpha then
+    local alphaBuilder = clay.element(aId)
+      :width(clay.SIZING_FIXED, barW)
+      :height(clay.SIZING_FIXED, barH)
+    if canvasBackend then
+      alphaBuilder:customData({ kind="clay_canvas2d_color_picker", part="alpha",
+        hue=st.h, saturation=st.s, value=st.v, alpha=st.a })
+    else
+      alphaBuilder:imageData(st.aTex.idx)
+    end
+    alphaBuilder:close()
+  end
+  clay.close() -- color picker root
 
   -- mouse
   local mx, my = window.mousePosition()
@@ -238,9 +255,12 @@ function color_picker(elid, rgba_in, opts)
   local bH  = clay.getElementData(hueId)
   local bA  = (showAlpha and aId) and clay.getElementData(aId) or nil
 
-  local overSV = bSV.found and mx>=bSV.x and mx<=bSV.x+bSV.width and my>=bSV.y and my<=bSV.y+bSV.height
-  local overH  = bH.found  and mx>=bH.x  and mx<=bH.x+bH.width   and my>=bH.y  and my<=bH.y+bH.height
-  local overA  = (bA and bA.found) and mx>=bA.x and mx<=bA.x+bA.width and my>=bA.y and my<=bA.y+bA.height
+  local overSV = bSV.found and clay.pointerOver(svId)
+      and mx>=bSV.x and mx<=bSV.x+bSV.width and my>=bSV.y and my<=bSV.y+bSV.height
+  local overH  = bH.found and clay.pointerOver(hueId)
+      and mx>=bH.x and mx<=bH.x+bH.width and my>=bH.y and my<=bH.y+bH.height
+  local overA  = (bA and bA.found) and clay.pointerOver(aId)
+      and mx>=bA.x and mx<=bA.x+bA.width and my>=bA.y and my<=bA.y+bA.height
 
   local changed = false
 
@@ -288,7 +308,9 @@ function color_picker(elid, rgba_in, opts)
 
   st.lastDown = down
 
-  if st._hDirty or st._hDirtyAll or st._hsvDirty or st._aDirty then
+  -- Keep the texture data dirty while Canvas2D is active. If the user later
+  -- switches to BGFX, the next BGFX frame will upload the current picker state.
+  if not canvasBackend and (st._hDirty or st._hDirtyAll or st._hsvDirty or st._aDirty) then
     update_textures(st, svW, svH, barW, barH, showAlpha)
   end
 
@@ -302,3 +324,13 @@ function color_picker(elid, rgba_in, opts)
 
   return out, changed, hsva
 end
+
+ComponentBuilder.register("color_picker", function(builder)
+  return render_color_picker(rawget(builder, "_id"), rawget(builder, "_arg1"), builder)
+end)
+
+function color_picker(elid, rgba_in)
+  return ComponentBuilder.new("color_picker", elid, rgba_in)
+end
+
+return { color_picker = color_picker }

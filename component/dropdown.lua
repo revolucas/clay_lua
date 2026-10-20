@@ -1,5 +1,6 @@
 local window = require("window")
 local theme = require("theme")
+local ComponentBuilder = require("component.builder")
 
 local _dropdown_state = _dropdown_state or {}
 local EMPTY_OPTIONS = {}
@@ -11,7 +12,10 @@ local function C(c) return c.r, c.g, c.b, c.a end
 local DEFAULTS = {
   placeholder = "Select an option",
   zIndex = 1100,
+  maxRows = 8,
 }
+
+local SCROLLBAR_OPTIONS = {}
 
 local function item_label(item)
   if type(item) == "table" then
@@ -31,10 +35,10 @@ local function item_value(item, index)
   return item
 end
 
--- dropdown(id, items, selectedValue, opts) -> selectedValue, changed
+-- dropdown(id, items, selectedValue): configure fluently, then :draw() for
+-- selectedValue, changed.
 -- Items may be strings or records with label/text and value/id/key fields.
--- opts: width, rowHeight, fontId, fontSize, placeholder, transitionDuration, zIndex, colors.
-function dropdown(elid, items, selectedValue, opts)
+local function render_dropdown(elid, items, selectedValue, opts)
   assert(elid and elid.id, "dropdown: id must come from clay.id()")
   assert(type(items) == "table", "dropdown: items must be a table")
 
@@ -53,6 +57,9 @@ function dropdown(elid, items, selectedValue, opts)
   local width = options.width or componentDefaults.width
   local zIndex = options.zIndex ~= nil and options.zIndex or DEFAULTS.zIndex
   local rowHeight = options.rowHeight or theme.spacing.controlHeight
+  local maxRows = options.maxRows or componentDefaults.maxRows or DEFAULTS.maxRows
+  assert(type(maxRows) == "number" and maxRows >= 1, "dropdown: maxRows must be at least 1")
+  maxRows = math.floor(maxRows)
   local fontId = options.fontId or componentDefaults.fontId
   local fontSize = options.fontSize or theme.type.body
   local duration = options.transitionDuration
@@ -93,7 +100,35 @@ function dropdown(elid, items, selectedValue, opts)
   end
 
   local popupId = clay.id("DropdownPopup", 1, true)
+  local viewportId = clay.id("DropdownViewport", 1, true)
+  local contentId = clay.id("DropdownContent", 1, true)
+  local scrollbarKey = viewportId.id * 2
+  local scrollbarTrackId = clay.id("ScrollBarTrack", scrollbarKey, true)
+  local scrollbarThumbId = clay.id("ScrollBarThumb", scrollbarKey, true)
+  local needsScrollbar = #items > maxRows
+  local rowIds = state.rowIds
+  if state.open then
+    if not rowIds then
+      rowIds = {}
+      state.rowIds = rowIds
+    end
+    for i = 1, #items do
+      if not rowIds[i] then rowIds[i] = clay.id("DropdownItem", i, true) end
+    end
+    for i = #items + 1, #rowIds do rowIds[i] = nil end
+  end
+
+  local scrollbarHovered = state.open and needsScrollbar and (
+    clay.pointerOver(scrollbarTrackId) or clay.pointerOver(scrollbarThumbId))
   local popupHovered = clay.pointerOver(popupId)
+    or clay.pointerOver(viewportId)
+    or clay.pointerOver(contentId)
+    or scrollbarHovered
+  if state.open and rowIds then
+    for i = 1, #items do
+      if clay.pointerOver(rowIds[i]) then popupHovered = true; break end
+    end
+  end
   if state.open and released and not buttonHovered and not popupHovered then
     state.open = false
   end
@@ -142,26 +177,24 @@ function dropdown(elid, items, selectedValue, opts)
   clay.close()
 
   local popupBuilder = clay.element(popupId)
-  local rowIds = {}
-  for i = 1, #items do
-    rowIds[i] = clay.id("DropdownItem", i, true)
-  end
-
-  for i, item in ipairs(items) do
-    local hovered = clay.pointerOver(rowIds[i])
-    local value = item_value(item, i)
-    if pressed and state.open and hovered then
-      state.pressedIndex = i
-    elseif released and state.open and state.pressedIndex == i and hovered then
-      if selectedValue ~= value then
-        selectedValue = value
-        changed = true
+  if state.open then
+    for i, item in ipairs(items) do
+      local hovered = not scrollbarHovered and clay.pointerOver(rowIds[i])
+      local value = item_value(item, i)
+      if pressed and hovered then
+        state.pressedIndex = i
+      elseif released and state.pressedIndex == i and hovered then
+        if selectedValue ~= value then
+          selectedValue = value
+          changed = true
+        end
+        state.open = false
       end
-      state.open = false
     end
   end
 
-  local popupHeight = state.open and (#items * rowHeight) or 0
+  local visibleRows = math.min(#items, maxRows)
+  local popupHeight = state.open and (visibleRows * rowHeight) or 0
   local animateRows = duration > 0 and state.open and #items <= MAX_ANIMATED_ROWS
   popupBuilder
     :floating()
@@ -171,7 +204,7 @@ function dropdown(elid, items, selectedValue, opts)
       :zIndex(zIndex)
       :done()
     :col()
-    :wGrow()
+    :width(clay.SIZING_FIXED, width)
     :h(popupHeight)
     :clip(false, true)
     :bg(C(c_popup))
@@ -187,16 +220,39 @@ function dropdown(elid, items, selectedValue, opts)
     -- renderer/clipping behavior, children of a zero-height floating element
     -- can still appear outside the clipped area.
     if state.open then
+      local scrollbarDefaults = theme.defaults.scrollbar
+      local scrollbarTrackWidth = scrollbarDefaults.trackWidth
+      local rowWidth = needsScrollbar
+        and math.max(1, width - scrollbarTrackWidth - scrollbarDefaults.margin - 4)
+        or nil
+
+      clay.element(viewportId)
+        :col()
+        :wGrow()
+        :height(clay.SIZING_FIXED, popupHeight)
+        :scrollable(true, false)
+        :open()
+
+      clay.element(contentId)
+        :col()
+        :wGrow()
+        :height(clay.SIZING_FIT)
+        :open()
+
       for i, item in ipairs(items) do
         local rowId = rowIds[i]
-        local hovered = clay.pointerOver(rowId)
+        local hovered = not scrollbarHovered and clay.pointerOver(rowId)
         local value = item_value(item, i)
         local isSelected = value == selectedValue
 
         local rowColor = isSelected and c_rowSelected or (hovered and c_rowHover or c_row)
-        local rowBuilder = clay.element(rowId)
-          :row()
-          :wGrow()
+        local rowBuilder = clay.element(rowId):row()
+        if rowWidth then
+          rowBuilder:width(clay.SIZING_FIXED, rowWidth):clip(true, false)
+        else
+          rowBuilder:wGrow()
+        end
+        rowBuilder
           :h(rowHeight)
           :padding(componentDefaults.paddingX, 0)
           :alignLC()
@@ -212,14 +268,37 @@ function dropdown(elid, items, selectedValue, opts)
             :done()
         clay.close()
       end
+
+      clay.close() -- content
+      clay.close() -- viewport
+
     end
 
   clay.close()
+  if state.open and needsScrollbar then
+    local scrollbarDefaults = theme.defaults.scrollbar
+    SCROLLBAR_OPTIONS.trackW = scrollbarDefaults.trackWidth
+    SCROLLBAR_OPTIONS.zIndex = zIndex + 1
+    local wheel = popupHovered and device and device.scroll and device.scroll.y or 0
+    clay.scrollbar(viewportId, contentId, wheel, SCROLLBAR_OPTIONS)
+  end
   clay.close()
 
   if released then state.pressedIndex = nil end
   state.wasDown = down
+  if changed and clay._invalidateCurrentRetainedRoot then
+    clay._invalidateCurrentRetainedRoot()
+  end
   return selectedValue, changed
+end
+
+ComponentBuilder.register("dropdown", function(builder)
+  return render_dropdown(rawget(builder, "_id"), rawget(builder, "_arg1"),
+    rawget(builder, "_arg2"), builder)
+end)
+
+function dropdown(elid, items, selectedValue)
+  return ComponentBuilder.new("dropdown", elid, items, selectedValue)
 end
 
 return { dropdown = dropdown }

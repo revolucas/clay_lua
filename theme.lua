@@ -62,6 +62,12 @@ local function sharedComponentColors(accent, surface, text, muted, border, selec
       hover = rgba(accent.r, accent.g, accent.b, 42), text = text,
       selBg = rgba(accent.r, accent.g, accent.b, 82), selText = selectedText,
     },
+    assetBrowser = {
+      background = surface, viewport = clear,
+      tile = rgba(surface.r + 8, surface.g + 8, surface.b + 10, 255),
+      hover = hover, selected = selectedBg, text = text, icon = text, muted = muted,
+      border = softBorder,
+    },
     tableview = {
       bg = clear, header = surface, headerText = text, headerHover = hover,
       headerSort = accent, resize = softBorder,
@@ -104,8 +110,16 @@ local componentDefaults = {
     width = 220, height = 28, padding = 6, buttonWidth = 28,
     fontId = 0, arrowFontId = 0, arrowSize = 20,
   },
-  dropdown = { width = 260, fontId = 1, paddingX = 10 },
+  dropdown = { width = 260, fontId = 1, paddingX = 10, maxRows = 8 },
   listview = { rowHeight = 22, indent = 16, fontId = 0, paddingX = 8 },
+  inspector = {
+    labelWidth = 100, rowHeight = 30, sectionHeight = 28,
+    padding = 10, sectionGap = 6, fontId = 1,
+  },
+  assetBrowser = {
+    width = 420, height = 340, columns = 3, tileWidth = 112,
+    tileHeight = 104, gap = 8, padding = 8, searchHeight = 32, fontId = 1,
+  },
   tableview = {
     fontId = 1, minColumnWidth = 36, resizeHandleWidth = 6,
     headerPadL = 6, headerPadR = 4, cellPadL = 6, cellPadR = 4,
@@ -169,6 +183,11 @@ local palettes = {
 }
 
 local themeNames = { indigo = "Indigo Night", graphite = "Graphite", paper = "Paper" }
+
+local function invalidateRetainedRoots()
+  local clay = rawget(_G, "clay")
+  if clay and clay.invalidateAll then clay.invalidateAll() end
+end
 local options = {
   { label = "Indigo Night", value = "indigo" },
   { label = "Graphite", value = "graphite" },
@@ -293,6 +312,7 @@ function theme.set(name)
   currentName, current = name, palettes[name]
   theme.currentName = name
   theme.syncGlobals()
+  invalidateRetainedRoots()
   return currentName
 end
 
@@ -308,6 +328,7 @@ function theme.define(alias, overlay)
   assert(type(alias) == "string" and alias ~= "", "theme.define: alias name required")
   assert(type(overlay) == "table", "theme.define: overlay table required")
   aliases[alias] = overlay
+  invalidateRetainedRoots()
   return overlay
 end
 
@@ -327,6 +348,7 @@ function theme.defineTheme(name, definition, label)
   if currentName == name then
     current = definition
     theme.syncGlobals()
+    invalidateRetainedRoots()
   end
   for i = 1, #options do
     if options[i].value == name then

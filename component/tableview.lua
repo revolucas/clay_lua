@@ -1,6 +1,7 @@
 local clay = require("clay")
 local window = require("window")
 local theme = require("theme")
+local ComponentBuilder = require("component.builder")
 
 -- State is per table id. Keep it across frames: callers normally rebuild the
 -- Clay layout every frame, while sort order, selection, and resized columns
@@ -903,63 +904,62 @@ local function draw_header(st, columns, opts, fontId, fontSize, headerHeight, co
     :backgroundColor(C(colors.header))
     :borderColor(C(colors.grid))
     :borderWidth(0, 0, 0, 1)
-    :children(function()
-      for ci, column in ipairs(columns) do
-        if column.hidden ~= true then
-          local key = column_key(column, ci)
-          local width = column_width(st, column, ci, opts)
-          local headerId = make_id(st, "headerCell", ci)
-          local resizeId = make_id(st, "resizeHandle", ci)
-          local hovered = clay.pointerOver(headerId)
-          local canSort = opts.sortable ~= false and column.sortable ~= false
-          local canResize = opts.resizableColumns ~= false and column.resizable ~= false
-          local title = column.title or column.label or column.name or tostring(key)
-          local indicator = ""
-          if st.sortColumn == key then
-            indicator = st.sortDirection == "desc" and "  ↓" or "  ↑"
-          end
-
-          clay.element(headerId)
-            :layoutDirection(clay.LEFT_TO_RIGHT)
-            :width(clay.SIZING_FIXED, width)
-            :height(clay.SIZING_GROW)
-            :childGap(0)
-            :childAlignment(clay.ALIGN_X_LEFT, clay.ALIGN_Y_CENTER)
-            :padding(theme.defaults.tableview.headerPadL, 0, theme.defaults.tableview.headerPadR, 0)
-            :backgroundColor(C(hovered and canSort and colors.headerHover or colors.header))
-            :borderColor(C(colors.grid))
-            :borderWidth(0, 0, 1, 0)
-            :children(function()
-              if column.headerRenderer then
-                column.headerRenderer(column, st.sortColumn == key and st.sortDirection or nil)
-              else
-                clay.text(tostring(title) .. indicator)
-                  :fontId(fontId)
-                  :fontSize(fontSize)
-                  :textColor(C(st.sortColumn == key and colors.headerSort or colors.headerText))
-                  :wrapMode(clay.TEXT_WRAP_NONE)
-                  :done()
-              end
-
-              if canResize then
-                clay.element(make_id(st, "empty", ci))
-                  :width(clay.SIZING_GROW)
-                  :height(clay.SIZING_FIXED, 1)
-                  :close()
-
-                local resizing = st.resize and st.resize.key == key
-                local resizeHovered = clay.pointerOver(resizeId)
-                clay.element(resizeId)
-                  :width(clay.SIZING_FIXED, theme.defaults.tableview.resizeHandleWidth)
-                  :height(clay.SIZING_GROW)
-                  :backgroundColor(C((resizing or resizeHovered) and colors.resizeHover or colors.resize))
-                  :pointerCaptureMode(clay.POINTER_CAPTURE_MODE_CAPTURE)
-                  :close()
-              end
-            end)
-        end
+    :open()
+  for ci, column in ipairs(columns) do
+    if column.hidden ~= true then
+      local key = column_key(column, ci)
+      local width = column_width(st, column, ci, opts)
+      local headerId = make_id(st, "headerCell", ci)
+      local resizeId = make_id(st, "resizeHandle", ci)
+      local hovered = clay.pointerOver(headerId)
+      local canSort = opts.sortable ~= false and column.sortable ~= false
+      local canResize = opts.resizableColumns ~= false and column.resizable ~= false
+      local title = column.title or column.label or column.name or tostring(key)
+      local indicator = ""
+      if st.sortColumn == key then
+        indicator = st.sortDirection == "desc" and "  ↓" or "  ↑"
       end
-    end)
+
+      clay.element(headerId)
+        :layoutDirection(clay.LEFT_TO_RIGHT)
+        :width(clay.SIZING_FIXED, width)
+        :height(clay.SIZING_GROW)
+        :childGap(0)
+        :childAlignment(clay.ALIGN_X_LEFT, clay.ALIGN_Y_CENTER)
+        :padding(theme.defaults.tableview.headerPadL, 0, theme.defaults.tableview.headerPadR, 0)
+        :backgroundColor(C(hovered and canSort and colors.headerHover or colors.header))
+        :borderColor(C(colors.grid))
+        :borderWidth(0, 0, 1, 0)
+        :open()
+      if column.headerRenderer then
+        column.headerRenderer(column, st.sortColumn == key and st.sortDirection or nil)
+      else
+        clay.text(tostring(title) .. indicator)
+          :fontId(fontId)
+          :fontSize(fontSize)
+          :textColor(C(st.sortColumn == key and colors.headerSort or colors.headerText))
+          :wrapMode(clay.TEXT_WRAP_NONE)
+          :done()
+      end
+
+      if canResize then
+        clay.element(make_id(st, "empty", ci))
+          :width(clay.SIZING_GROW)
+          :height(clay.SIZING_FIXED, 1)
+          :close()
+
+        local resizing = st.resize and st.resize.key == key
+        local resizeHovered = clay.pointerOver(resizeId)
+        clay.element(resizeId)
+          :width(clay.SIZING_FIXED, theme.defaults.tableview.resizeHandleWidth)
+          :height(clay.SIZING_GROW)
+          :backgroundColor(C((resizing or resizeHovered) and colors.resizeHover or colors.resize))
+          :close()
+      end
+      clay.close() -- header cell
+    end
+  end
+  clay.close() -- header row
 end
 
 local function draw_rows(st, columns, opts, firstIndex, lastIndex, rowHeight, contentWidth, fontId, fontSize, colors)
@@ -987,13 +987,13 @@ local function draw_rows(st, columns, opts, firstIndex, lastIndex, rowHeight, co
       :width(clay.SIZING_FIXED, contentWidth)
       :height(clay.SIZING_FIXED, rowHeight)
       :childAlignment(clay.ALIGN_X_CENTER, clay.ALIGN_Y_CENTER)
-      :children(function()
-        clay.text(opts.emptyText or "No rows")
-          :fontId(fontId)
-          :fontSize(fontSize)
-          :textColor(C(colors.emptyText))
-          :done()
-      end)
+      :open()
+    clay.text(opts.emptyText or "No rows")
+      :fontId(fontId)
+      :fontSize(fontSize)
+      :textColor(C(colors.emptyText))
+      :done()
+    clay.close()
   else
     for viewIndex = firstIndex, lastIndex do
       local entry = st.viewRows[viewIndex]
@@ -1025,87 +1025,86 @@ local function draw_rows(st, columns, opts, firstIndex, lastIndex, rowHeight, co
             background and background.g or 0,
             background and background.b or 0,
             background and background.a or 0)
-        :children(function()
-          for ci, column in ipairs(columns) do
-            if column.hidden ~= true then
-              local width = column_width(st, column, ci, opts)
-              local cellIndex = (viewIndex * 1000) + ci
-              local cellId = make_id(st, "cell", cellIndex)
-              local key = column_key(column, ci)
-              local cellHovered = clay.pointerOver(cellId)
-              if leftPressed and cellHovered then
-                st.pressedCell = { rowKey = entry.key, columnKey = key, columnIndex = ci }
-              end
-              if leftReleased and cellHovered and st.pressedCell
-                  and st.pressedCell.rowKey == entry.key
-                  and st.pressedCell.columnKey == key then
-                releasedCell = { column = column, columnKey = key, columnIndex = ci }
-              end
-              local editingCell = st.editing and st.editing.rowKey == entry.key
-                  and st.editing.columnKey == key
-              local primaryCell = st.focused and st.primaryKey == entry.key
-                  and st.primaryColumnKey == key
-              local xAlign = clay.ALIGN_X_LEFT
-              if column.align == "center" then xAlign = clay.ALIGN_X_CENTER
-              elseif column.align == "right" then xAlign = clay.ALIGN_X_RIGHT end
+        :open()
+      for ci, column in ipairs(columns) do
+        if column.hidden ~= true then
+          local width = column_width(st, column, ci, opts)
+          local cellIndex = (viewIndex * 1000) + ci
+          local cellId = make_id(st, "cell", cellIndex)
+          local key = column_key(column, ci)
+          local cellHovered = clay.pointerOver(cellId)
+          if leftPressed and cellHovered then
+            st.pressedCell = { rowKey = entry.key, columnKey = key, columnIndex = ci }
+          end
+          if leftReleased and cellHovered and st.pressedCell
+              and st.pressedCell.rowKey == entry.key
+              and st.pressedCell.columnKey == key then
+            releasedCell = { column = column, columnKey = key, columnIndex = ci }
+          end
+          local editingCell = st.editing and st.editing.rowKey == entry.key
+              and st.editing.columnKey == key
+          local primaryCell = st.focused and st.primaryKey == entry.key
+              and st.primaryColumnKey == key
+          local xAlign = clay.ALIGN_X_LEFT
+          if column.align == "center" then xAlign = clay.ALIGN_X_CENTER
+          elseif column.align == "right" then xAlign = clay.ALIGN_X_RIGHT end
 
-              clay.element(cellId)
-                :layoutDirection(clay.LEFT_TO_RIGHT)
-                :width(clay.SIZING_FIXED, width)
-                :height(clay.SIZING_GROW)
-                :childAlignment(xAlign, clay.ALIGN_Y_CENTER)
-                :padding(theme.defaults.tableview.cellPadL, 0, theme.defaults.tableview.cellPadR, 0)
-                :borderColor(C(primaryCell and (colors.cellFocus or colors.headerSort) or colors.grid))
-                :borderWidth(primaryCell and 1 or 0, primaryCell and 1 or 0,
-                    primaryCell and 1 or 0, 1)
-                :children(function()
-                  if editingCell then
-                    local editColors
-                    if st.editing.error then
-                      editColors = {
-                        border = { r = 255, g = 96, b = 96, a = 255 },
-                        bg = { r = 65, g = 30, b = 35, a = 255 },
-                        bgAct = { r = 75, g = 34, b = 40, a = 255 },
-                      }
-                    end
-                    local editedText, _, focused = clay.edit(st.editing.id,
-                        st.editing.text, {
-                          width = math.max(1, width - theme.defaults.tableview.cellPadL - theme.defaults.tableview.cellPadR),
-                          height = rowHeight,
-                          pad = theme.defaults.edit.padding,
-                          fontId = fontId,
-                          fontSize = fontSize,
-                          maxChars = column.maxChars or 2000,
-                          filter = column.inputFilter,
-                          colors = editColors,
-                          focusOnCreate = true,
-                        })
-                    st.editing.text = editedText
-                    if focused then
-                      st.editing.hasFocus = true
-                      st.editing.lostFocus = false
-                    elseif st.editing.hasFocus then
-                      st.editing.lostFocus = true
-                    end
-                  else
-                    local renderer = column.cellRenderer or opts.cellRenderer
-                    if renderer then
-                      renderer(column, row, viewIndex, ci, entry.sourceIndex, isSelected, cellId)
-                    else
-                      local value = get_column_value(column, row, entry.sourceIndex)
-                      if column.format then value = column.format(value, row, entry.sourceIndex) end
-                      clay.text(value == nil and "" or tostring(value))
-                        :fontId(fontId)
-                        :fontSize(fontSize)
-                        :textColor(C(isSelected and colors.rowSelTxt or colors.rowText))
-                        :wrapMode(clay.TEXT_WRAP_NONE)
-                        :done()
-                    end
-                  end
-                end)
+          clay.element(cellId)
+            :layoutDirection(clay.LEFT_TO_RIGHT)
+            :width(clay.SIZING_FIXED, width)
+            :height(clay.SIZING_GROW)
+            :childAlignment(xAlign, clay.ALIGN_Y_CENTER)
+            :padding(theme.defaults.tableview.cellPadL, 0, theme.defaults.tableview.cellPadR, 0)
+            :borderColor(C(primaryCell and (colors.cellFocus or colors.headerSort) or colors.grid))
+            :borderWidth(primaryCell and 1 or 0, primaryCell and 1 or 0,
+                primaryCell and 1 or 0, 1)
+            :open()
+          if editingCell then
+            local editColors
+            if st.editing.error then
+              editColors = {
+                border = { r = 255, g = 96, b = 96, a = 255 },
+                bg = { r = 65, g = 30, b = 35, a = 255 },
+                bgAct = { r = 75, g = 34, b = 40, a = 255 },
+              }
+            end
+            local editedText, _, focused = clay.edit(st.editing.id, st.editing.text)
+              :width(math.max(1, width - theme.defaults.tableview.cellPadL - theme.defaults.tableview.cellPadR))
+              :height(rowHeight)
+              :padding(theme.defaults.edit.padding)
+              :fontId(fontId)
+              :fontSize(fontSize)
+              :maxChars(column.maxChars or 2000)
+              :filter(column.inputFilter)
+              :colors(editColors)
+              :focusOnCreate(true)
+              :draw()
+            st.editing.text = editedText
+            if focused then
+              st.editing.hasFocus = true
+              st.editing.lostFocus = false
+            elseif st.editing.hasFocus then
+              st.editing.lostFocus = true
+            end
+          else
+            local renderer = column.cellRenderer or opts.cellRenderer
+            if renderer then
+              renderer(column, row, viewIndex, ci, entry.sourceIndex, isSelected, cellId)
+            else
+              local value = get_column_value(column, row, entry.sourceIndex)
+              if column.format then value = column.format(value, row, entry.sourceIndex) end
+              clay.text(value == nil and "" or tostring(value))
+                :fontId(fontId)
+                :fontSize(fontSize)
+                :textColor(C(isSelected and colors.rowSelTxt or colors.rowText))
+                :wrapMode(clay.TEXT_WRAP_NONE)
+                :done()
             end
           end
-        end)
+          clay.close() -- table cell
+        end
+      end
+      clay.close() -- table row
 
       if leftReleased and st.pressedRowKey == entry.key and hovered then
         clicked = { entry = entry, index = viewIndex, cell = releasedCell }
@@ -1224,7 +1223,7 @@ end
 -- virtualization. Increment model.version or pass dataVersion when mutating
 -- rows/columns in place so cached sorting/filtering is refreshed. Keep row
 -- keys unique and stable when reordering data.
-function tableview(elid, model, opts)
+local function render_tableview(elid, model, opts)
   opts = opts or {}
   model = model or {}
   local columns = assert(model.columns, "tableview: model.columns required")
@@ -1331,53 +1330,53 @@ function tableview(elid, model, opts)
     root:height(clay.SIZING_FIT)
   end
 
-  root:children(function()
-    local horizontal = clay.element(horizontalId)
+  root:open()
+  local horizontal = clay.element(horizontalId)
+    :layoutDirection(clay.TOP_TO_BOTTOM)
+    :width(clay.SIZING_GROW)
+    :childGap(0)
+    :clip(true, false)
+  if tableHeight then horizontal:height(clay.SIZING_GROW)
+  else horizontal:height(clay.SIZING_FIT) end
+  horizontal:open()
+
+  clay.element(contentId)
+    :layoutDirection(clay.TOP_TO_BOTTOM)
+    :width(clay.SIZING_FIXED, contentWidth)
+    :height(clay.SIZING_FIXED, contentHeight)
+    :childGap(0)
+    :open()
+  draw_header(st, columns, opts, fontId, fontSize, headerHeight, contentWidth, resolvedColors)
+
+  if internalScroll then
+    clay.element(bodyId)
       :layoutDirection(clay.TOP_TO_BOTTOM)
-      :width(clay.SIZING_GROW)
-      :childGap(0)
-      :clip(true, false)
-    if tableHeight then horizontal:height(clay.SIZING_GROW)
-    else horizontal:height(clay.SIZING_FIT) end
-
-    horizontal:children(function()
-      clay.element(contentId)
-        :layoutDirection(clay.TOP_TO_BOTTOM)
-        :width(clay.SIZING_FIXED, contentWidth)
-        :height(clay.SIZING_FIXED, contentHeight)
-        :childGap(0)
-        :children(function()
-          draw_header(st, columns, opts, fontId, fontSize, headerHeight, contentWidth, resolvedColors)
-
-          if internalScroll then
-            clay.element(bodyId)
-              :layoutDirection(clay.TOP_TO_BOTTOM)
-              :width(clay.SIZING_FIXED, contentWidth)
-              :height(clay.SIZING_FIXED, bodyHeight)
-              :clip(false, true)
-              :children(function()
-                clay.element(bodyContentId)
-                  :layoutDirection(clay.TOP_TO_BOTTOM)
-                  :width(clay.SIZING_FIXED, contentWidth)
-                  :height(clay.SIZING_FIXED, rowsContentHeight)
-                  :children(function()
-                    draw_rows(st, columns, opts, firstIndex, lastIndex,
-                        rowHeight, contentWidth, fontId, fontSize, resolvedColors)
-                  end)
-              end)
-          else
-            clay.element(bodyContentId)
-              :layoutDirection(clay.TOP_TO_BOTTOM)
-              :width(clay.SIZING_FIXED, contentWidth)
-              :height(clay.SIZING_FIXED, rowsContentHeight)
-              :children(function()
-                draw_rows(st, columns, opts, firstIndex, lastIndex,
-                    rowHeight, contentWidth, fontId, fontSize, resolvedColors)
-              end)
-          end
-        end)
-    end)
-  end)
+      :width(clay.SIZING_FIXED, contentWidth)
+      :height(clay.SIZING_FIXED, bodyHeight)
+      :clip(false, true)
+      :open()
+    clay.element(bodyContentId)
+      :layoutDirection(clay.TOP_TO_BOTTOM)
+      :width(clay.SIZING_FIXED, contentWidth)
+      :height(clay.SIZING_FIXED, rowsContentHeight)
+      :open()
+    draw_rows(st, columns, opts, firstIndex, lastIndex,
+        rowHeight, contentWidth, fontId, fontSize, resolvedColors)
+    clay.close() -- table body content
+    clay.close() -- table body viewport
+  else
+    clay.element(bodyContentId)
+      :layoutDirection(clay.TOP_TO_BOTTOM)
+      :width(clay.SIZING_FIXED, contentWidth)
+      :height(clay.SIZING_FIXED, rowsContentHeight)
+      :open()
+    draw_rows(st, columns, opts, firstIndex, lastIndex,
+        rowHeight, contentWidth, fontId, fontSize, resolvedColors)
+    clay.close() -- table body content
+  end
+  clay.close() -- table content
+  clay.close() -- horizontal viewport
+  clay.close() -- table root
 
   invoke_selection_changed(st, opts)
   st.lastLeftDown = leftDown
@@ -1413,6 +1412,21 @@ function tableview(elid, model, opts)
   api.clickedIndex = st.clickedIndex
   api.clickedRow = st.clickedRow
   api.clickedKey = st.clickedKey
+  local clickedDuringBuild = st.clickedIndex ~= nil
   st.clickedIndex, st.clickedRow, st.clickedKey = nil, nil, nil
+  if clickedDuringBuild and clay._invalidateCurrentRetainedRoot then
+    clay._invalidateCurrentRetainedRoot()
+  end
+  if clay._trackRetainedKeyboardInput then clay._trackRetainedKeyboardInput(st.focused) end
   return api
 end
+
+ComponentBuilder.register("tableview", function(builder)
+  return render_tableview(rawget(builder, "_id"), rawget(builder, "_arg1"), builder)
+end)
+
+function tableview(elid, model)
+  return ComponentBuilder.new("tableview", elid, model)
+end
+
+return { tableview = tableview }

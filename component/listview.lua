@@ -1,6 +1,7 @@
 local window = require("window")
 local theme = require("theme")
 local utf8 = require("utf8")
+local ComponentBuilder = require("component.builder")
 
 -- Virtualized List / Tree View for Clay
 
@@ -8,11 +9,6 @@ local _lv_state = _lv_state or {} -- [rootId] -> state
 local _lv_stack = _lv_stack or {} -- open/close stack (optional)
 local MAX_TRANSITIONED_ROWS = 96
 local EMPTY_COLORS = {}
-
--- transient mouse bookkeeping for release-based clicks
-local _lv_mouse_was_down      = _lv_mouse_was_down or false
-local _lv_pressed_row_key     = _lv_pressed_row_key or nil
-local _lv_pressed_tri_key     = _lv_pressed_tri_key or nil
 
 local function now_ms() return window.time() * 1000.0 end
 
@@ -22,14 +18,31 @@ local function default_get_key(item, idx)
     return idx
 end
 
+local function default_get_children(item)
+    return type(item) == "table" and item.children or nil
+end
+
+local function default_get_label(item, key)
+    if type(item) == "string" then return item end
+    if type(item) == "table" then
+        return item.text or item.label or item.name or tostring(key)
+    end
+    return tostring(item)
+end
+
 local function ensure_state(rootId)
     local st = _lv_state[rootId]
     if not st then
         st = {
             expanded = {},
             selectedKey = nil,
+            selectedKeys = {},
+            anchorKey = nil,
             lastClickT = 0,
             lastClickKey = nil,
+            lastDown = false,
+            pressedRowKey = nil,
+            pressedTriangleKey = nil,
 
             -- stable mapping from arbitrary key -> small int (for clay.id offset)
             _key_to_int = {},
@@ -40,6 +53,7 @@ local function ensure_state(rootId)
         }
         _lv_state[rootId] = st
     end
+    st.selectedKeys = st.selectedKeys or {}
     return st
 end
 
@@ -52,30 +66,32 @@ local function key_to_int(st, key)
     return v
 end
 
-local function flatten_visible(items, st, getKey, out)
-    out = out or st._flat
-    local n = 0
+local function flatten_level(list, st, getKey, getChildren, out, count, depth)
+    if type(list) ~= "table" then return count end
+    for i = 1, #list do
+        local item = list[i]
+        local key = getKey(item, i)
+        local children = getChildren(item, key)
+        local hasChildren = type(children) == "table" and #children > 0
 
-    local function rec(list, depth)
-        for i, it in ipairs(list or {}) do
-            local key = getKey(it, i)
-            local hasChildren = (type(it) == "table" and type(it.children) == "table" and #it.children > 0)
+        count = count + 1
+        local entry = out[count]
+        if not entry then entry = {}; out[count] = entry end
+        entry.key = key
+        entry.item = item
+        entry.depth = depth
+        entry.hasChildren = hasChildren
 
-            n = n + 1
-            local e = out[n]
-            if not e then e = {}; out[n] = e end
-            e.key = key
-            e.item = it
-            e.depth = depth
-            e.hasChildren = hasChildren
-
-            if hasChildren and st.expanded[key] then
-                rec(it.children, depth + 1)
-            end
+        if hasChildren and st.expanded[key] then
+            count = flatten_level(children, st, getKey, getChildren, out, count, depth + 1)
         end
     end
+    return count
+end
 
-    rec(items, 0)
+local function flatten_visible(items, st, getKey, getChildren, out)
+    out = out or st._flat
+    local n = flatten_level(items, st, getKey, getChildren, out, 0, 0)
 
     -- trim tail
     for i = n + 1, #out do out[i] = nil end
@@ -93,8 +109,6 @@ local function listview_draw(elid, opts)
 
     -- mouse states
     local down     = (window.mouseButtonDown(window.MOUSE_BUTTON_LEFT))
-    local was_down = _lv_mouse_was_down
-    local released = (was_down and not down)
 
     -- config
     local componentDefaults = theme.defaults.listview
@@ -105,7 +119,10 @@ local function listview_draw(elid, opts)
     local zebra    = (opts.zebra ~= false)
     local transitionDuration = opts.transitionDuration or 0
     local getKey   = opts.getKey or default_get_key
+    local getChildren = opts.getChildren or default_get_children
+    local getLabel = opts.getLabel or default_get_label
     local getIcon  = opts.getIcon
+    local multiSelect = opts.multiSelect == true
 
     local col = opts.colors or EMPTY_COLORS
     local defaults = theme.colors.listview
@@ -118,6 +135,20 @@ local function listview_draw(elid, opts)
 
     local rootId = elid.id
     local st = ensure_state(rootId)
+    if opts.expanded and opts.expanded ~= st.expanded then
+        st.expanded = opts.expanded
+    end
+    if opts.selectedKey ~= nil and opts.selectedKey ~= st.selectedKey then
+        st.selectedKey = opts.selectedKey
+        for key in pairs(st.selectedKeys) do st.selectedKeys[key] = nil end
+        st.selectedKeys[opts.selectedKey] = true
+    end
+    local was_down = st.lastDown
+    local released = (was_down and not down)
+    if down and not was_down then
+        st.pressedRowKey = nil
+        st.pressedTriangleKey = nil
+    end
 
     -- Resolve scroll virtualization context
     local viewH, scrollY = nil, 0
@@ -130,7 +161,7 @@ local function listview_draw(elid, opts)
     end
 
     -- flatten according to expansion (reuses st._flat)
-    local visible, total = flatten_visible(opts.items, st, getKey, st._flat)
+    local visible, total = flatten_visible(opts.items, st, getKey, getChildren, st._flat)
 
     -- visible range (virtualization)
     local firstIdx, lastIdx = 1, total
@@ -159,11 +190,18 @@ local function listview_draw(elid, opts)
     end
 
     local clickedKey = nil
+    local clickedItem = nil
+    local retainedFollowup = false
 
     for i = firstIdx, lastIdx do
         local v = visible[i]
         local kid = key_to_int(st, v.key) -- stable int for ids
-        local row_is_sel = (st.selectedKey ~= nil and st.selectedKey == v.key)
+        local row_is_sel
+        if multiSelect then
+            row_is_sel = st.selectedKeys[v.key] == true
+        else
+            row_is_sel = st.selectedKey ~= nil and st.selectedKey == v.key
+        end
 
         -- zebra
         local yAlt = (zebra and (i % 2 == 0)) and c_bgAlt or nil
@@ -207,10 +245,11 @@ local function listview_draw(elid, opts)
                 clay.close()
 
                 if clay.pointerOver(tri_id) and down and not was_down then
-                    _lv_pressed_tri_key = v.key
+                    st.pressedTriangleKey = v.key
                 end
-                if released and _lv_pressed_tri_key == v.key and clay.pointerOver(tri_id) then
+                if released and st.pressedTriangleKey == v.key and clay.pointerOver(tri_id) then
                     st.expanded[v.key] = not st.expanded[v.key]
+                    retainedFollowup = true
                 end
             else
                 clay.element(trisp_id)
@@ -244,8 +283,7 @@ local function listview_draw(elid, opts)
                     end
                 end
 
-                local label = (type(v.item) == "string") and v.item or (v.item.text or tostring(v.key))
-                clay.text(label)
+                clay.text(tostring(getLabel(v.item, v.key)))
                     :fontId(fontId)
                     :fontSize(fontSize)
                     :textColor(row_is_sel and c_selTxt or c_text)
@@ -255,10 +293,11 @@ local function listview_draw(elid, opts)
 
             -- ROW press tracking (click on release)
             if clay.pointerOver(row_id) and down and not was_down then
-                _lv_pressed_row_key = v.key
+                st.pressedRowKey = v.key
             end
-            if released and _lv_pressed_row_key == v.key and clay.pointerOver(row_id) then
+            if released and st.pressedRowKey == v.key and clay.pointerOver(row_id) then
                 clickedKey = v.key
+                clickedItem = v.item
             end
 
         clay.close() -- row
@@ -271,31 +310,99 @@ local function listview_draw(elid, opts)
             :close()
     end
 
+    -- Click resolution happens after row elements were declared. Retained roots
+    -- need one follow-up build to display the changed selection/expansion.
     -- click resolution (single vs double)
     if clickedKey ~= nil then
+        retainedFollowup = true
         local t = now_ms()
-        if st.lastClickKey == clickedKey and (t - (st.lastClickT or 0) < 350) then
-            if opts.onActivate then opts.onActivate(clickedKey) end
+        local activated = st.lastClickKey == clickedKey and (t - (st.lastClickT or 0) < 350)
+        if activated then
+            if opts.onActivate then opts.onActivate(clickedKey, clickedItem) end
         else
+            if multiSelect then
+                local ctrl = window.keyDown(window.KEY_LEFT_CONTROL)
+                    or window.keyDown(window.KEY_RIGHT_CONTROL)
+                local shift = window.keyDown(window.KEY_LEFT_SHIFT)
+                    or window.keyDown(window.KEY_RIGHT_SHIFT)
+                if shift and st.anchorKey ~= nil then
+                    for key in pairs(st.selectedKeys) do st.selectedKeys[key] = nil end
+                    local anchorIndex, targetIndex
+                    for i = 1, total do
+                        if visible[i].key == st.anchorKey then anchorIndex = i end
+                        if visible[i].key == clickedKey then targetIndex = i end
+                    end
+                    if anchorIndex and targetIndex then
+                        local first = math.min(anchorIndex, targetIndex)
+                        local last = math.max(anchorIndex, targetIndex)
+                        for i = first, last do st.selectedKeys[visible[i].key] = true end
+                    else
+                        st.selectedKeys[clickedKey] = true
+                    end
+                elseif ctrl then
+                    st.selectedKeys[clickedKey] = st.selectedKeys[clickedKey] and nil or true
+                    st.anchorKey = clickedKey
+                else
+                    for key in pairs(st.selectedKeys) do st.selectedKeys[key] = nil end
+                    st.selectedKeys[clickedKey] = true
+                    st.anchorKey = clickedKey
+                end
+            else
+                for key in pairs(st.selectedKeys) do st.selectedKeys[key] = nil end
+                st.selectedKeys[clickedKey] = true
+                st.anchorKey = clickedKey
+            end
             st.selectedKey = clickedKey
+            if opts.onSelect then opts.onSelect(clickedKey, clickedItem, st.selectedKeys) end
         end
         st.lastClickKey, st.lastClickT = clickedKey, t
     end
 
-    -- persist mouse state
-    _lv_mouse_was_down = down
-    _lv_pressed_row_key = (released and nil) or _lv_pressed_row_key
-    _lv_pressed_tri_key = (released and nil) or _lv_pressed_tri_key
+    -- Persist per-list mouse state. Keeping this on the component state avoids
+    -- one listview consuming another listview's press/release pair.
+    st.lastDown = down
+    if released then
+        st.pressedRowKey = nil
+        st.pressedTriangleKey = nil
+    end
+    if retainedFollowup and clay._invalidateCurrentRetainedRoot then
+        clay._invalidateCurrentRetainedRoot()
+    end
 
     return st.selectedKey, st.expanded, total, rowH
 end
 
--- Public APIs (same surface)
-function listview(id, opts, children_fn)
-    local api = listview_draw(id, opts)
-    if children_fn then children_fn(api) end
+local function render_treeview(elid, items, builder)
+    rawset(builder, "_items", items)
+    local selectedKey, expanded, total, rowHeight = listview_draw(elid, builder)
+    local state = ensure_state(elid.id)
     clay.close()
-    return api
+    rawset(builder, "_items", nil)
+    return selectedKey, expanded, state.selectedKeys, total, rowHeight
+end
+
+ComponentBuilder.register("treeview", function(builder)
+    return render_treeview(rawget(builder, "_id"), rawget(builder, "_arg1"), builder)
+end)
+
+function treeview(id, items)
+    return ComponentBuilder.new("treeview", id, items)
+end
+
+-- Public APIs (same surface)
+ComponentBuilder.register("listview", function(builder)
+    if rawget(builder, "_arg1") ~= nil then
+        rawset(builder, "_items", rawget(builder, "_arg1"))
+    end
+    local selectedKey, expanded, total, rowHeight =
+        listview_draw(rawget(builder, "_id"), builder)
+    clay.close()
+    rawset(builder, "_items", nil)
+    return selectedKey, expanded, total, rowHeight
+end)
+
+function listview(id, items)
+    return ComponentBuilder.new("listview", id, items)
 end
 
 function listview_open(id, opts)

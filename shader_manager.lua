@@ -1,6 +1,6 @@
 local ffi = require("ffi")
 local bgfx = require("ffi.ffi_bgfx")
-local shaderc = require("ffi.ffi_shaderc")
+local shaderc = ffi.arch ~= "wasm" and require("ffi.ffi_shaderc") or nil
 
 local M = {}
 
@@ -82,6 +82,9 @@ end
 
 local function compile_to_string(stage, platform, profile, input_path, output_path,
         include_dirs, source, varying_source, debug_information)
+    if not shaderc then
+        error("shader compilation must be done before building the browser target", 0)
+    end
     local options = ffi.new("bgfx_shaderc_compile_options[1]")
     options[0].shader_type = string.byte(stage)
     options[0].platform = platform
@@ -248,21 +251,28 @@ function M.load_clay_program(root)
     root = root:gsub("\\", "/"):gsub("/$", "")
     if root == "" then root = "." end
 
-    local renderer = tonumber(bgfx.bgfx_get_renderer_type())
-    local platform
-    local runtime_dir
-    if ffi.os == "Windows" then
-        platform = "windows"
-        runtime_dir = "x64"
-    elseif ffi.os == "Linux" then
-        platform = "linux"
-        runtime_dir = "linux64"
+    local vertex, fragment
+    if ffi.arch == "wasm" then
+        vertex = assert(read_file("/shaders/clay.vs.bin"), "missing precompiled WebGL vertex shader")
+        fragment = assert(read_file("/shaders/clay.fs.bin"), "missing precompiled WebGL fragment shader")
     else
-        error("runtime shader compilation is supported on Windows and Linux", 0)
+        local renderer = tonumber(bgfx.bgfx_get_renderer_type())
+        local platform
+        local runtime_dir
+        if ffi.os == "Windows" then
+            platform = "windows"
+            runtime_dir = "x64"
+        elseif ffi.os == "Linux" then
+            platform = "linux"
+            runtime_dir = "linux64"
+        else
+            error("runtime shader compilation is supported on Windows and Linux", 0)
+        end
+
+        vertex = compile_stage(root, "v", renderer, platform, runtime_dir)
+        fragment = compile_stage(root, "f", renderer, platform, runtime_dir)
     end
 
-    local vertex = compile_stage(root, "v", renderer, platform, runtime_dir)
-    local fragment = compile_stage(root, "f", renderer, platform, runtime_dir)
     local vertex_shader = create_shader(vertex, "vertex")
     local fragment_shader = create_shader(fragment, "fragment")
     local program = bgfx.bgfx_create_program(vertex_shader, fragment_shader, true)
@@ -270,6 +280,23 @@ function M.load_clay_program(root)
         error("bgfx failed to link the Clay shader program", 0)
     end
     return program
+end
+
+-- Compile the browser's WebGL2 shader pair on the host before linking the
+-- Emscripten runtime. shaderc itself is a host tool/library, not part of Wasm.
+function M.compile_web_shaders(root, output_dir)
+    root = root or "."
+    root = root:gsub("\\", "/"):gsub("/$", "")
+    if root == "" then root = "." end
+    output_dir = assert(output_dir, "output directory is required")
+
+    local vertex = compile_stage(root, "v", bgfx.BGFX_RENDERER_TYPE_OPENGLES, "asm.js", "web")
+    local fragment = compile_stage(root, "f", bgfx.BGFX_RENDERER_TYPE_OPENGLES, "asm.js", "web")
+    local ok, err = write_file(join(output_dir, "clay.vs.bin"), vertex)
+    if not ok then error("could not write WebGL vertex shader: " .. tostring(err), 0) end
+    ok, err = write_file(join(output_dir, "clay.fs.bin"), fragment)
+    if not ok then error("could not write WebGL fragment shader: " .. tostring(err), 0) end
+    return true
 end
 
 return M

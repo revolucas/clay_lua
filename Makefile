@@ -44,6 +44,18 @@ WIN_SUBDIR := $(BIN_DIR)/x64
 .PHONY: all
 all: linux
 
+# Separate browser target: Lua 5.4 + luaffifb/libffi compiled by Emscripten.
+# The web toolchain is bootstrapped on demand by web/build.sh.
+.PHONY: web web-serve web-clean
+web:
+	./web/build.sh
+
+web-serve:
+	./web/serve.sh
+
+web-clean:
+	$(RM) -rf web/build web/dist
+
 # -------- Linux (default) --------
 ifeq ($(UNAME_S),Linux)
     SOEXT := so
@@ -67,10 +79,16 @@ ifeq ($(UNAME_S),Linux)
 	@[ -f $(LJ_LIB)/libluajit.so ] && cp -n $(LJ_LIB)/libluajit.so* $(LIN_SUBDIR)/ 2>/dev/null || true
 	@find "$(LJ_LIB)" -maxdepth 1 -type f -name 'luajit*' -perm -111 -exec cp -n '{}' "$(LIN_SUBDIR)/" \; 2>/dev/null || true
 
-    # pattern rule to build each stb .so
-    # $* is the base name: stb_image / stb_rect_pack / stb_truetype
-    $(LIN_SUBDIR)/lib%.$(SOEXT): $($*_src) | $(LIN_SUBDIR)
-	$(CC) $(CFLAGS) $(SHARED) -o $@ $($*_src) $(LDFLAGS)
+    # Keep explicit source prerequisites so changes to each wrapper rebuild
+    # the matching library when running the normal `make linux` target.
+    $(LIN_SUBDIR)/libstb_image.$(SOEXT): $(stb_image_src) | $(LIN_SUBDIR)
+	$(CC) $(CFLAGS) $(SHARED) -o $@ $(stb_image_src) $(LDFLAGS)
+
+    $(LIN_SUBDIR)/libstb_rect_pack.$(SOEXT): $(stb_rect_pack_src) | $(LIN_SUBDIR)
+	$(CC) $(CFLAGS) $(SHARED) -o $@ $(stb_rect_pack_src) $(LDFLAGS)
+
+    $(LIN_SUBDIR)/libstb_truetype.$(SOEXT): $(stb_truetype_src) | $(LIN_SUBDIR)
+	$(CC) $(CFLAGS) $(SHARED) -o $@ $(stb_truetype_src) $(LDFLAGS)
 
     $(RGFW_SO): $(SRCS_RGFW) $(RGFW_DIR)/RGFW.h | $(LIN_SUBDIR)
 	$(CC) -O2 -fPIC -I$(RGFW_DIR) -shared -o $@ $(SRCS_RGFW) $(RGFW_LINUX_LIBS)

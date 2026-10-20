@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0d1320">
+  <title>Clay Lua Web</title>
+  <style>
+    @font-face { font-family: "Clay Mono"; src: url("./fonts/DejaVuSansMono.ttf") format("truetype"); font-display: swap; }
+    @font-face { font-family: "Clay Georgia"; src: url("./fonts/georgia.ttf") format("truetype"); font-display: swap; }
+    @font-face { font-family: "Clay Codicon"; src: url("./fonts/codicon.ttf") format("truetype"); font-display: swap; }
+    :root { color-scheme: dark; font: 16px/1.5 system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body { background: #0d1320; color: #eef3ff; }
+    #scene { position: fixed; inset: 0; width: 100%; height: 100%; background: #111a2a; touch-action: none; }
+    #backend { position: fixed; left: 90px; bottom: 8px; z-index: 4; display: flex; align-items: center; gap: 8px; padding: 6px 9px; border: 1px solid #42506d; border-radius: 6px; background: #172238e8; color: #a9b7cf; font-size: 12px; }
+    #renderer { border: 0; background: transparent; color: #eef3ff; font: inherit; }
+    #renderer:focus-visible { outline: 2px solid #7aa7ff; outline-offset: 2px; }
+    #status { position: fixed; right: 14px; bottom: 10px; z-index: 2; color: #a9b7cf; font-size: 12px; font-variant-numeric: tabular-nums; text-shadow: 0 1px 2px #000; }
+    #status.error { color: #ff9696; }
+    #console-toggle, #console-panel button { border: 1px solid #50617f; border-radius: 5px; background: #172238f2; color: #eef3ff; font: inherit; }
+    #console-toggle { position: fixed; left: 14px; bottom: 8px; z-index: 4; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+    #console-toggle:hover, #console-panel button:hover { background: #263755; }
+    #console-panel { position: fixed; left: 14px; right: 14px; bottom: 44px; z-index: 5; height: min(44vh, 420px); min-height: 150px; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid #50617f; border-radius: 7px; background: #101722f5; box-shadow: 0 8px 28px #0009; color: #d9e3f5; font: 12px/1.45 ui-monospace, "Clay Mono", monospace; }
+    #console-panel[hidden] { display: none; }
+    #console-toolbar { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid #33425c; background: #1a263a; }
+    #console-toolbar strong { margin-right: auto; font: inherit; font-weight: 700; }
+    #console-panel button { padding: 3px 9px; cursor: pointer; font-size: 11px; }
+    #console-output { min-height: 0; margin: 0; padding: 9px 11px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+    @media (max-width: 600px) { #console-panel { left: 6px; right: 6px; bottom: 40px; height: 50vh; } #console-toggle { left: 6px; } #backend { left: 82px; bottom: 6px; } }
+  </style>
+</head>
+<body>
+  <canvas id="scene" aria-label="Clay Lua interface rendered with BGFX WebGL2"></canvas>
+  <label id="backend">Renderer
+    <select id="renderer" aria-label="Rendering backend">
+      <option value="bgfx">BGFX WebGL2</option>
+      <option value="canvas2d">Canvas2D</option>
+    </select>
+  </label>
+  <output id="status" aria-live="polite">Starting Lua 5.4 + FFI-Wasm…</output>
+  <button id="console-toggle" type="button" aria-expanded="false" aria-controls="console-panel">Console</button>
+  <section id="console-panel" aria-label="Demo console" hidden>
+    <div id="console-toolbar">
+      <strong>Demo console</strong>
+      <button id="console-copy" type="button">Copy</button>
+      <button id="console-clear" type="button">Clear</button>
+      <button id="console-close" type="button" aria-label="Close console">Close</button>
+    </div>
+    <pre id="console-output" role="log" aria-live="polite" aria-relevant="additions"></pre>
+  </section>
+  <script type="module" src="./host.js"></script>
+</body>
+</html>
