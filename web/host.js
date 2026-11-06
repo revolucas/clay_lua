@@ -263,7 +263,7 @@ async function start() {
   if (rendererMode === "canvas2d") {
     await Promise.all([
       document.fonts.load('16px "Clay Mono"'),
-      document.fonts.load('16px "Clay Georgia"'),
+      document.fonts.load('16px "Clay Serif"'),
       document.fonts.load('16px "Clay Codicon"'),
     ]);
   }

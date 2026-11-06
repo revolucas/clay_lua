@@ -45,7 +45,7 @@ local font_cache = {}
 local INVALID_HANDLE = 0xffff
 local fonts = {
     [0] = "font/DejaVuSansMono.ttf",
-    [1] = "font/georgia.ttf",
+    [1] = "font/DejaVuSerif.ttf",
     [2] = "font/codicon.ttf"
 }
 local font_aliases = {}

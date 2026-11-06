@@ -1,74 +1,90 @@
 # Building clay_lua
 
-## TL;DR
+## Linux quick start
+
+Clone the project with its bindings submodule, then install LuaJIT and the
+native build tools:
+
 ```bash
-# Linux shared libraries and runtime binaries (including the RGFW adapter)
-make linux bgfx-runtime
-
-# Build/stage Technetium's MinGW LuaJIT import library and runtime once
-cmake --preset linux-mingw
-cmake --build build/linux-mingw --target technetium-luajit
-
-# Cross-compile Windows DLLs (needs MinGW-w64)
-make win64 bgfx-runtime CC_WIN64=x86_64-w64-mingw32-gcc
+git clone --recurse-submodules https://github.com/revolucas/clay_lua.git
+cd clay_lua
+sudo apt-get update
+sudo apt-get install --yes build-essential pkg-config luajit \
+  libluajit-5.1-dev libx11-dev libxrandr-dev libxcursor-dev \
+  libxi-dev libxinerama-dev libxext-dev
+make linux
+make test
 ```
 
-## Requirements
-- Linux: gcc, make, and the X11 development libraries used by RGFW
-- Windows cross (optional): `mingw-w64`
+`make linux` builds the Clay Lua binding, RGFW adapter, and stb modules into
+`bin/linux64/`. `make test` builds the binding and runs the native floating
+clip regression and the Lua retained UI regression. The test target needs only
+LuaJIT and a C compiler; it does not build or launch BGFX.
 
-## Notes
-- Sources are in `src/`:
-  - `src/clay_lua_bindings/clay_lua_bindings.c`
-  - `src/stb/stb_*_wrapper.c` (your wrappers over vendored stb headers)
-- Clay and stb outputs go to `bin/linux64/` and `bin/x64/`.
-- The RGFW adapter is built from the vendored RGFW 1.8.1 source and does not need LuaJIT headers.
-- Linux builds use RGFW's X11 backend and need X11, XRandR, XCursor, Xi, Xinerama, and Xext development libraries.
-- Windows builds cross-compile the RGFW adapter into `bin/x64/librgfw.dll`.
-- `bgfx-runtime` stages the matching API 166 bgfx and Shaderc shared libraries
-  from `BGFX_RUNTIME_ROOT` (default: `../../Projects/Game Engines/Technetium/bin`).
-  Set `BGFX_RUNTIME_ROOT` to another bgfx bin root built from the same source.
-- Windows linking uses the import library produced by Technetium's
-  `technetium-luajit` target (`build/linux-mingw/stage/win64-mingw/lib`) and
-  stages its matching `lua51.dll`. A local LuaJIT import library in
-  `$(LUAJIT_ROOT)/src` takes precedence. Set `TECHNETIUM_MINGW_STAGE` to the
-  corresponding `stage/win64-mingw` directory if Technetium uses a different
-  build location.
-- Runtime shader sources are in `shader/src/`; shared bgfx shader includes are
-  in `shader/include/`. Clay recompiles them for the active renderer and caches
-  bytecode under the platform's `bin/` directory.
-- Outputs go to `bin/` (kept in git with `.gitkeep`, contents ignored).
+The full native demo also needs BGFX and Shaderc shared libraries built from
+the API revision expected by this checkout. Stage them with:
 
-## Web (Lua 5.4 + FFI-Wasm + BGFX)
+```bash
+make bgfx-runtime-linux BGFX_RUNTIME_ROOT=/path/to/bgfx-bin
+```
 
-The browser build uses the `lua-ffi-wasm` Lua 5.4.7 + luaffifb/libffi runtime
-and compiles Clay, BGFX, Canvas2D bridges, and the stb helpers into one Wasm
-module. Canvas2D is the default; choose BGFX WebGL2 from the renderer menu or
-open `http://localhost:8000/?renderer=bgfx`. Canvas2D draws Clay's
-render commands with the browser's 2D canvas and does not initialize a WebGL
-context. Both paths use the same Lua app and Clay layout. Frame CPU time and
-requestAnimationFrame FPS appear at the bottom right for quick comparison.
+`BGFX_RUNTIME_ROOT` must contain the matching Linux BGFX and Shaderc shared
+libraries under `linux64/`. To stage both Linux and Windows runtime files, use
+`make bgfx-runtime BGFX_RUNTIME_ROOT=/path/to/bgfx-bin`; Windows files must be
+under `x64/`. These runtime binaries are not committed to the repository.
 
-The Canvas2D path currently covers the demo's rectangles, borders, rich text,
-clipping, node graph wires/grid, and color picker. BGFX texture handles are
-backend-specific and are not drawn by Canvas2D. A small C adapter keeps BGFX
-handle, transient-buffer, and 64-bit state/texture-flag calls on the C side of
-the Lua FFI boundary.
+## Configuration
+
+Linux LuaJIT is found with `pkg-config luajit`. For a custom LuaJIT build,
+override `LUAJIT_ROOT`, `LJ_INC`, and/or `LJ_LIB`:
+
+```bash
+make linux LUAJIT_ROOT=/path/to/luajit
+```
+
+Windows cross-compilation is optional and needs MinGW-w64 plus a Windows
+LuaJIT import library/runtime. Point `LUAJIT_ROOT` at its source/build tree, or
+point `TECHNETIUM_MINGW_STAGE` at a compatible staged LuaJIT package, then run:
+
+```bash
+make win64 CC_WIN64=x86_64-w64-mingw32-gcc \
+  TECHNETIUM_MINGW_STAGE=/path/to/win64-mingw-stage
+```
+
+`BGFX_RUNTIME_ROOT` must also be supplied to `make bgfx-runtime-win64` when
+staging the matching Windows BGFX and Shaderc DLLs. Linux builds use the RGFW X11
+backend and need X11, XRandR, XCursor, Xi, Xinerama, and Xext development
+headers. Windows builds place the RGFW adapter at `bin/x64/librgfw.dll`.
+
+Shader source is in `shader/src/`, with shared includes in `shader/include/`.
+Builds put generated libraries and runtime files in `bin/`; binary outputs are
+ignored by Git.
+
+## Browser build (Lua 5.4 + FFI-Wasm)
+
+The browser build uses a pinned Lua 5.4.7 + luaffifb/libffi runtime and builds
+the Clay app into Wasm. Canvas2D is the default; choose BGFX WebGL2 from the
+renderer menu or open `http://localhost:8000/?renderer=bgfx`. Canvas2D draws
+the demo's shapes, text, clipping, node graph, and color picker. BGFX texture
+handles are backend-specific and are not drawn by Canvas2D. Frame CPU time and
+requestAnimationFrame FPS appear at the bottom right.
+
+Canvas2D is the recommended browser renderer at this stage. BGFX WebGL2 runs,
+but some text in controls and retained pages can still render as blocky glyphs;
+that backend remains experimental for the full demo.
 
 Requirements: Emscripten (`emcc`, `em++`, `emconfigure`, `emmake`), GNU Make,
-Autoconf, Libtool, and the project's BGFX, bx, and bimg source checkouts. By
-default the build finds those checkouts as siblings of `clay_lua`. Set
-`BGFX_ROOT`, `BX_ROOT`, and `BIMG_ROOT` if they are elsewhere. The web target
-builds the BGFX Wasm libraries and compiles the WebGL shader pair with the
-host LuaJIT and shaderc runtime before linking Lua. Build and serve the demo:
+Autoconf, Libtool, BGFX, bx, and bimg source checkouts. Set `BGFX_ROOT`,
+`BX_ROOT`, and `BIMG_ROOT` if those sources are not in sibling directories.
+The first build fetches the pinned `lua-ffi-wasm` revision and its Lua,
+luaffifb, and libffi submodules into ignored `web/vendor/`. To intentionally
+upgrade that runtime, set `LUA_FFI_WASM_REF` to a commit hash. To reuse an
+existing checkout, set `LUA_FFI_WASM_ROOT`.
 
 ```bash
 make web
 make web-serve
 ```
 
-The first build checks out `thenumbernine/lua-ffi-wasm` and its submodules into
-the ignored `web/vendor/` directory. To use an existing checkout, set
-`LUA_FFI_WASM_ROOT=/path/to/lua-ffi-wasm` before running `make web`. The demo is
-served at `http://localhost:8000/` by default; set `PORT` to choose another
-port. Build artifacts go to `web/dist/`.
+The server listens on `http://localhost:8000/` by default; set `PORT` to use a
+different port. Build artifacts go to `web/dist/` and `web/build/`.

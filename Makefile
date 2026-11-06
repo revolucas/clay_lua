@@ -1,7 +1,10 @@
-# --- config: where LuaJIT lives (sibling repo) ---
-LUAJIT_ROOT ?= ../luajit
-LJ_INC      := $(LUAJIT_ROOT)/src
-LJ_LIB      := $(LUAJIT_ROOT)/src
+# LuaJIT can come from a local source build or the system pkg-config package.
+# Set LUAJIT_ROOT, LJ_INC, and LJ_LIB when using a custom build.
+LUAJIT_ROOT ?=
+LUAJIT_SOURCE_DIR := $(if $(LUAJIT_ROOT),$(LUAJIT_ROOT)/src,)
+LJ_INC ?= $(if $(wildcard $(LUAJIT_SOURCE_DIR)/lua.h),$(LUAJIT_SOURCE_DIR),$(shell pkg-config --variable=includedir luajit 2>/dev/null))
+LJ_LIB ?= $(if $(wildcard $(LUAJIT_SOURCE_DIR)/libluajit*),$(LUAJIT_SOURCE_DIR),$(shell pkg-config --variable=libdir luajit 2>/dev/null))
+LUAJIT ?= luajit
 
 MODULE      ?= clay
 SRC_DIR     := src
@@ -11,8 +14,8 @@ BIN_DIR     := bin
 RUNTIME_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 MINGW_PREFIX ?= x86_64-w64-mingw32
 CC_WIN64 ?= $(MINGW_PREFIX)-gcc
-BGFX_RUNTIME_ROOT ?= ../../Projects/Game Engines/Technetium/bin
-TECHNETIUM_MINGW_STAGE ?= ../../Projects/Game Engines/Technetium/build/linux-mingw/stage/win64-mingw
+BGFX_RUNTIME_ROOT ?=
+TECHNETIUM_MINGW_STAGE ?=
 
 empty :=
 space := $(empty) $(empty)
@@ -73,8 +76,21 @@ ifeq ($(UNAME_S),Linux)
     .PHONY: linux
     linux: $(CLAY_SO) $(STB_SOLIBS) $(RGFW_SO)
 
+    .PHONY: test check-luajit check-bindings
+    test: $(CLAY_SO)
+	$(CC) -O2 -Isrc -o $(LIN_SUBDIR)/clay_floating_clip_pointer_test tests/clay_floating_clip_pointer.c
+	$(LIN_SUBDIR)/clay_floating_clip_pointer_test
+	$(LUAJIT) tests/clay_retained.lua
+
+    check-luajit:
+	@test -n "$(LJ_INC)" -a -f "$(LJ_INC)/lua.h" || { echo "LuaJIT headers not found; install libluajit-5.1-dev or set LJ_INC" >&2; exit 1; }
+	@test -n "$(LJ_LIB)" || { echo "LuaJIT library directory not found; install libluajit-5.1-dev or set LJ_LIB" >&2; exit 1; }
+
+    check-bindings:
+	@test -f "$(SRC_DIR)/clay_lua_bindings/clay_lua_bindings.c" || { echo "Bindings submodule is missing; run git submodule update --init --recursive" >&2; exit 1; }
+
     # clay module (without stb sources)
-    $(CLAY_SO): $(SRCS_CLAY) $(CLAY_HEADERS) | $(LIN_SUBDIR)
+    $(CLAY_SO): $(SRCS_CLAY) $(CLAY_HEADERS) | $(LIN_SUBDIR) check-luajit check-bindings
 	$(CC) $(CFLAGS) $(SHARED) -o $@ $(SRCS_CLAY) $(LDFLAGS)
 	@[ -f $(LJ_LIB)/libluajit.so ] && cp -n $(LJ_LIB)/libluajit.so* $(LIN_SUBDIR)/ 2>/dev/null || true
 	@find "$(LJ_LIB)" -maxdepth 1 -type f -name 'luajit*' -perm -111 -exec cp -n '{}' "$(LIN_SUBDIR)/" \; 2>/dev/null || true
@@ -119,7 +135,7 @@ LUAJIT_RUNTIME_EXE := $(LUAJIT_RUNTIME_DIR)/luajit.exe
 
 ifneq ($(filter win64,$(MAKECMDGOALS)),)
 ifeq ($(strip $(LUAJIT_IMPLIB)),)
-$(error No LuaJIT Windows import library found. Build it with Technetium: cmake --preset linux-mingw && cmake --build build/linux-mingw --target technetium-luajit)
+$(error No LuaJIT Windows import library found. Set LUAJIT_ROOT to a Windows LuaJIT build or TECHNETIUM_MINGW_STAGE to a compatible staged LuaJIT build)
 endif
 endif
 
@@ -130,17 +146,23 @@ WIN_DLL_STBS := $(addprefix $(WIN_SUBDIR)/lib,$(addsuffix .dll,$(STB_NAMES)))
 .PHONY: win64
 win64: $(WIN_DLL_CLAY) $(WIN_DLL_STBS) $(WIN_DLL_RGFW)
 
-# Stage the bgfx and Shaderc pair built from the same API revision.
-.PHONY: bgfx-runtime
-bgfx-runtime: | $(LIN_SUBDIR) $(WIN_SUBDIR)
+# Stage the BGFX and Shaderc pairs built from the same API revision.
+.PHONY: bgfx-runtime bgfx-runtime-linux bgfx-runtime-win64
+bgfx-runtime: bgfx-runtime-linux bgfx-runtime-win64
+
+bgfx-runtime-linux: | $(LIN_SUBDIR)
+	@test -n "$(BGFX_RUNTIME_ROOT)" || { echo "Set BGFX_RUNTIME_ROOT to the bin directory containing matching BGFX and Shaderc runtimes" >&2; exit 1; }
 	test -f "$(BGFX_RUNTIME_ROOT)/linux64/bgfx-shared-libRelease.so"
 	test -f "$(BGFX_RUNTIME_ROOT)/linux64/shaderc_sharedRelease.so"
-	test -f "$(BGFX_RUNTIME_ROOT)/x64/bgfx-shared-libRelease.dll"
-	test -f "$(BGFX_RUNTIME_ROOT)/x64/shaderc_sharedRelease.dll"
-	test -f "$(BGFX_RUNTIME_ROOT)/x64/D3DCompiler_47.dll"
 	cp -f "$(BGFX_RUNTIME_ROOT)/linux64/bgfx-shared-libRelease.so" "$(LIN_SUBDIR)/"
 	cp -f "$(BGFX_RUNTIME_ROOT)/linux64/bgfx-shared-libRelease.so" "$(LIN_SUBDIR)/libbgfx-shared-libRelease.so"
 	cp -f "$(BGFX_RUNTIME_ROOT)/linux64/shaderc_sharedRelease.so" "$(LIN_SUBDIR)/"
+
+bgfx-runtime-win64: | $(WIN_SUBDIR)
+	@test -n "$(BGFX_RUNTIME_ROOT)" || { echo "Set BGFX_RUNTIME_ROOT to the bin directory containing matching BGFX and Shaderc runtimes" >&2; exit 1; }
+	test -f "$(BGFX_RUNTIME_ROOT)/x64/bgfx-shared-libRelease.dll"
+	test -f "$(BGFX_RUNTIME_ROOT)/x64/shaderc_sharedRelease.dll"
+	test -f "$(BGFX_RUNTIME_ROOT)/x64/D3DCompiler_47.dll"
 	cp -f "$(BGFX_RUNTIME_ROOT)/x64/bgfx-shared-libRelease.dll" "$(WIN_SUBDIR)/"
 	cp -f "$(BGFX_RUNTIME_ROOT)/x64/shaderc_sharedRelease.dll" "$(WIN_SUBDIR)/"
 	cp -f "$(BGFX_RUNTIME_ROOT)/x64/D3DCompiler_47.dll" "$(WIN_SUBDIR)/"

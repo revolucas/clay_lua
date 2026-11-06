@@ -4,6 +4,7 @@ set -euo pipefail
 WEB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WEB_REPO_ROOT="$(cd "$WEB_DIR/.." && pwd)"
 LUA_FFI_WASM_ROOT="${LUA_FFI_WASM_ROOT:-$WEB_DIR/vendor/lua-ffi-wasm}"
+LUA_FFI_WASM_REF="${LUA_FFI_WASM_REF:-3c3ab4de2be3492c9d77d49a413d22ab2f06009d}"
 BGFX_ROOT="${BGFX_ROOT:-$(cd "$WEB_REPO_ROOT/../bgfx" 2>/dev/null && pwd || true)}"
 BX_ROOT="${BX_ROOT:-${BGFX_ROOT:+$BGFX_ROOT/../bx}}"
 BIMG_ROOT="${BIMG_ROOT:-${BGFX_ROOT:+$BGFX_ROOT/../bimg}}"
@@ -79,8 +80,22 @@ mkdir -p "$WEB_REPO_ROOT/bin/web" "$WEB_DIR/shaders"
 
 if [[ ! -d "$LUA_FFI_WASM_ROOT/.git" ]]; then
 	mkdir -p "$(dirname "$LUA_FFI_WASM_ROOT")"
-	git clone --depth 1 --branch master \
-		https://github.com/thenumbernine/lua-ffi-wasm.git "$LUA_FFI_WASM_ROOT"
+	git init "$LUA_FFI_WASM_ROOT"
+	git -C "$LUA_FFI_WASM_ROOT" remote add origin \
+		https://github.com/thenumbernine/lua-ffi-wasm.git
+fi
+
+# Pin clean builds to the tested upstream revision. Override the ref only when
+# intentionally upgrading lua-ffi-wasm; leave existing local edits untouched.
+if ! git -C "$LUA_FFI_WASM_ROOT" cat-file -e "$LUA_FFI_WASM_REF^{commit}" 2>/dev/null; then
+	git -C "$LUA_FFI_WASM_ROOT" fetch --depth 1 origin "$LUA_FFI_WASM_REF"
+fi
+if [[ "$(git -C "$LUA_FFI_WASM_ROOT" rev-parse HEAD)" != "$LUA_FFI_WASM_REF" ]]; then
+	if [[ -n "$(git -C "$LUA_FFI_WASM_ROOT" status --porcelain)" ]]; then
+		printf 'lua-ffi-wasm checkout has local changes; set LUA_FFI_WASM_REF to its intended commit or use a clean checkout\n' >&2
+		exit 1
+	fi
+	git -C "$LUA_FFI_WASM_ROOT" checkout --detach "$LUA_FFI_WASM_REF"
 fi
 
 # Only fetch Lua, luaffifb, and libffi. The upstream checkout also has SDL and

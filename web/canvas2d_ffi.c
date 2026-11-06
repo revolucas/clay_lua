@@ -127,7 +127,7 @@ EM_JS(double, clay_canvas2d_measure_text,
 	text = text.split(String.fromCharCode(9)).join("    ");
 	const family = font_id === 0 ? '"Clay Mono", monospace'
 		: font_id === 2 ? '"Clay Codicon", sans-serif'
-		: '"Clay Georgia", Georgia, serif';
+		: '"Clay Serif", serif';
 	ctx.font = `${Math.max(1, size)}px ${family}`;
 	const lines = text.split(String.fromCharCode(10));
 	let width = 0;
@@ -149,7 +149,7 @@ EM_JS(void, clay_canvas2d_draw_text,
 	const baseColor = `rgba(${r},${g},${b},${a / 255})`;
 	const family = font_id === 0 ? '"Clay Mono", monospace'
 		: font_id === 2 ? '"Clay Codicon", sans-serif'
-		: '"Clay Georgia", Georgia, serif';
+		: '"Clay Serif", serif';
 	const style = { color: baseColor, bold: false, italic: false, shadow: false };
 	const stack = [];
 	const runs = [];

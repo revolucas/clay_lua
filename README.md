@@ -5,9 +5,28 @@ Includes demo pages (corner radius, long lists, text alignment, floating invento
 
 A demonstration of [clay_lua_bindings](https://github.com/revolucas/clay_lua_bindings)
 
+## Build and run
+
+See [BUILDING.md](BUILDING.md) for clean-clone setup, native build steps,
+regression checks, and the optional browser build. Clone with submodules:
+
+```bash
+git clone --recurse-submodules https://github.com/revolucas/clay_lua.git
+cd clay_lua
+make linux
+make test
+```
+
+The full desktop demo also needs matching BGFX and Shaderc runtime libraries;
+these are separate from the Lua bindings and are not stored in this repository.
+Clay Lua is licensed under the [MIT License](LICENSE); the bindings submodule
+has its own copy. Third-party component and font notices are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 An optional browser build uses Lua 5.4 with the `lua-ffi-wasm` FFI layer. It
-includes BGFX/WebGL2 and Canvas2D renderers; see
-[BUILDING.md](BUILDING.md#web-lua-54-ffi-wasm-bgfx) for build instructions.
+includes BGFX/WebGL2 and Canvas2D renderers; Canvas2D is recommended because
+some controls still show text artifacts with BGFX WebGL2. See the
+[browser build instructions](BUILDING.md#browser-build-lua-54-ffi-wasm).
 
 ## Features
 - Clay UI elements and scrolling with pointer integration

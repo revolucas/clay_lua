@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install LuaJIT
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential pkg-config luajit \
+            libluajit-5.1-dev libx11-dev libxrandr-dev libxcursor-dev \
+            libxi-dev libxinerama-dev libxext-dev
+      - name: Build Linux libraries
+        run: make linux
+      - name: Run regression checks
+        run: make test

@@ -19,3 +19,7 @@ bin/x64/**
 /web/build/
 /web/dist/
 /web/vendor/
+
+# Per-machine audio and IDE project settings.
+/alsoft.ini
+/clay_lua.geany
