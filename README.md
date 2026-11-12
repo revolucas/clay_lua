@@ -23,6 +23,10 @@ Clay Lua is licensed under the [MIT License](LICENSE); the bindings submodule
 has its own copy. Third-party component and font notices are in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
+Prebuilt Linux and Windows x64 packages can be generated with
+[`tools/package-release.sh`](tools/package-release.sh); setup details are in
+[BUILDING.md](BUILDING.md#release-packages).
+
 An optional browser build uses Lua 5.4 with the `lua-ffi-wasm` FFI layer. It
 includes BGFX/WebGL2 and Canvas2D renderers; Canvas2D is recommended because
 some controls still show text artifacts with BGFX WebGL2. See the

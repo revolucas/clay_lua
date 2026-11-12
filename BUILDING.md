@@ -60,6 +60,29 @@ Shader source is in `shader/src/`, with shared includes in `shader/include/`.
 Builds put generated libraries and runtime files in `bin/`; binary outputs are
 ignored by Git.
 
+## Release packages
+
+The release script builds and tests the Linux libraries, cross-builds the
+Windows libraries, stages the matching BGFX and Shaderc runtimes, and writes
+Linux `.tar.gz`, Windows `.zip`, and checksum files under `release-artifacts/`.
+It requires the BGFX, bx, and bimg source checkouts for their upstream license
+files and a MinGW LuaJIT stage for Windows:
+
+```bash
+BGFX_ROOT=/path/to/bgfx \
+BX_ROOT=/path/to/bx \
+BIMG_ROOT=/path/to/bimg \
+BGFX_RUNTIME_ROOT=/path/to/bgfx-bin \
+TECHNETIUM_MINGW_STAGE=/path/to/win64-mingw-stage \
+./tools/package-release.sh v0.1.0
+```
+
+The Linux archive bundles LuaJIT, BGFX, Shaderc, the app libraries, and fonts.
+It needs X11 runtime libraries, `libstdc++6`, and a working Vulkan or OpenGL
+driver. The Windows archive bundles LuaJIT and the runtime DLLs. Launch either
+package with `run.sh` or `run.bat` from its extracted directory. License files
+for packaged runtimes are included in each archive.
+
 ## Browser build (Lua 5.4 + FFI-Wasm)
 
 The browser build uses a pinned Lua 5.4.7 + luaffifb/libffi runtime and builds

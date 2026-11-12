@@ -8,6 +8,16 @@ respective licenses apply to those parts:
 - Clay: [license](src/clay/LICENSE.md).
 - RGFW: [license](src/rgfw/LICENSE).
 - stb libraries: [license](src/stb/LICENSE).
+- LuaJIT, BGFX, Shaderc, bx, and bimg are included in native release packages; their
+  license texts are in [third_party_licenses](third_party_licenses/).
+- The packages include BGFX, bx, and bimg runtime dependencies. The release
+  archives also include applicable upstream license files harvested from those
+  source checkouts under `licenses/upstream/`.
+- The Windows package includes MinGW's `libgcc` runtime. Its GPL and Runtime
+  Library Exception notices are in `third_party_licenses/`.
+- The Windows package includes Microsoft's `D3DCompiler_47.dll`, a
+  redistributable Windows SDK component; see Microsoft's
+  [packaging guidance](https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/packaging/packaging-framework-packages).
 - DejaVu Serif font (`font/DejaVuSerif.ttf`): see
   [font/LICENSE-DejaVu.txt](font/LICENSE-DejaVu.txt).
 - VS Code Codicons font (`font/codicon.ttf`): Microsoft, VS Code Codicons,
